@@ -1,6 +1,6 @@
 [package]
 name = "snipzi"
-version = "0.1.2"
+version = "0.1.3"
 description = "Snipzi desktop: quick screen and region screenshots"
 edition = "2021"
 

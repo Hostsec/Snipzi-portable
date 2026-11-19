@@ -208,7 +208,7 @@ with sync_playwright() as p:
         return ov, oerr
 
     ov, oerr = run_overlay(False)
-    check("overlay: plain hint when redaction is off", "hide" not in ov.evaluate("document.getElementById('hint').textContent"))
+    check("overlay: plain hint when redaction is off", "Step" not in ov.evaluate("document.getElementById('hint').textContent"))
     check("overlay: painted frame at physical size", ov.evaluate("[document.getElementById('frame').width, document.getElementById('frame').height]") == [1600, 1200])
     ov.mouse.move(100, 100); ov.mouse.down(); ov.mouse.move(300, 250, steps=4); ov.mouse.up()
     ov.wait_for_function("window.__calls.some(c => c.cmd === 'finish_region')")
@@ -230,13 +230,15 @@ with sync_playwright() as p:
     ov.close()
 
     ov, oerr = run_overlay(True)
-    check("overlay redact: hint says areas can be hidden", "hide" in ov.evaluate("document.getElementById('hint').textContent"))
+    check("overlay redact: step 1 hint explains save area and Space", "SAVE" in ov.evaluate("document.getElementById('hint').textContent") and "Space" in ov.evaluate("document.getElementById('hint').textContent"))
     ov.mouse.move(100, 100); ov.mouse.down(); ov.mouse.move(400, 300, steps=4); ov.mouse.up()
+    check("overlay redact: step 2 bar says nothing hidden yet", ov.evaluate("document.getElementById('done').textContent") == "Save without hiding anything" and "Step 2" in ov.evaluate("document.getElementById('bartext').textContent"))
     check("overlay redact: waits for confirmation", not any(c["cmd"] == "finish_region" for c in ov.evaluate("window.__calls")))
     ov.mouse.move(150, 120); ov.mouse.down(); ov.mouse.move(250, 180, steps=4); ov.mouse.up()
     ov.mouse.move(600, 500); ov.mouse.down(); ov.mouse.move(700, 550, steps=3); ov.mouse.up()  # outside selection: ignored
     check("overlay redact: one box drawn, outside drag ignored", ov.evaluate("document.querySelectorAll('.rbox').length") == 1)
-    ov.keyboard.press("Enter"); ov.wait_for_function("window.__calls.some(c => c.cmd === 'finish_region')")
+    check("overlay redact: button counts hidden boxes", ov.evaluate("document.getElementById('done').textContent") == "Save (1 hidden)")
+    ov.click("#done"); ov.wait_for_function("window.__calls.some(c => c.cmd === 'finish_region')")
     res = [c for c in ov.evaluate("window.__calls") if c["cmd"] == "finish_region"][0]["args"]["result"]
     check("overlay redact: selection scaled", (res["x"], res["y"], res["w"], res["h"]) == (200, 200, 600, 400), str(res))
     check("overlay redact: box relative to selection and scaled", res["redactions"] == [[100, 40, 200, 120]], str(res["redactions"]))
@@ -247,6 +249,15 @@ with sync_playwright() as p:
     ov.mouse.move(150, 120); ov.mouse.down(); ov.mouse.move(250, 180, steps=3); ov.mouse.up()
     ov.mouse.click(200, 150)
     check("overlay redact: clicking a box removes it", ov.evaluate("document.querySelectorAll('.rbox').length") == 0)
+    # Space = whole screen, then hide a box, then save
+    ov.evaluate("window.__calls.length = 0")
+    ov.evaluate("window.__listeners['overlay:frame'].forEach(cb => cb({payload: {idx: 0, redact: true}}))"); ov.wait_for_function("window.__calls.some(c => c.cmd === 'overlay_ready')")
+    ov.keyboard.press("Space")
+    ov.mouse.move(200, 100); ov.mouse.down(); ov.mouse.move(300, 150, steps=3); ov.mouse.up()
+    ov.keyboard.press("Enter"); ov.wait_for_function("window.__calls.some(c => c.cmd === 'finish_region')")
+    res = [c for c in ov.evaluate("window.__calls") if c["cmd"] == "finish_region"][0]["args"]["result"]
+    check("overlay redact: Space selects the whole screen", (res["x"], res["y"], res["w"], res["h"]) == (0, 0, 1600, 1200), str(res))
+    check("overlay redact: box on whole screen scaled", res["redactions"] == [[400, 200, 200, 100]], str(res["redactions"]))
     check("overlay redact: no JS errors", not oerr, str(oerr))
     ov.close()
     b.close()

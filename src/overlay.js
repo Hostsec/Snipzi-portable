@@ -46,7 +46,7 @@
   }
 
   const HINT_PLAIN = "Drag to select. Esc or right-click to cancel.";
-  const HINT_REDACT = "Drag to select, then hide private areas before saving. Esc or right-click to cancel.";
+  const HINT_REDACT = "Step 1 of 2: drag over the area you want to SAVE. Press Space to use the whole screen. Esc cancels.";
 
   listen("overlay:frame", async (e) => {
     resetUi();
@@ -99,6 +99,28 @@
     tag.style.top = Math.max(0, r.y - 24) + "px";
   }
 
+  const doneBtn = document.getElementById("done");
+
+  function updateBar() {
+    const n = rboxes.length;
+    barText.textContent = "Step 2 of 2: drag over anything private to hide it. Click a black box to remove it.";
+    doneBtn.textContent = n ? "Save (" + n + " hidden)" : "Save without hiding anything";
+  }
+
+  function enterRedactStep(r) {
+    rect = r;
+    place(sel, r);
+    updateTag(r);
+    hint.style.display = "none";
+    dim.style.display = "none";
+    sel.style.display = "block";
+    phase = "redact";
+    updateBar();
+    bar.style.display = "block";
+    bar.style.left = Math.max(0, Math.min(r.x, window.innerWidth - 520)) + "px";
+    bar.style.top = Math.max(0, Math.min(r.y + r.h - 44, window.innerHeight - 44)) + "px";
+  }
+
   async function cancel() {
     resetUi();
     await invoke("cancel_capture");
@@ -147,6 +169,7 @@
         if (i >= 0) {
           rboxes[i].el.remove();
           rboxes.splice(i, 1);
+          updateBar();
         }
         return;
       }
@@ -185,11 +208,7 @@
       place(sel, r);
       updateTag(r);
       if (redactMode) {
-        phase = "redact";
-        barText.textContent = "Drag to hide areas. Click a black box to remove it.";
-        bar.style.display = "block";
-        bar.style.left = Math.max(0, Math.min(r.x, window.innerWidth - 480)) + "px";
-        bar.style.top = Math.min(r.y + r.h + 8, window.innerHeight - 44) + "px";
+        enterRedactStep(r);
       } else {
         finish();
       }
@@ -201,6 +220,7 @@
         el.remove();
       } else {
         rboxes.push({ el, x, y, w, h });
+        updateBar();
       }
       drawing = null;
     }
@@ -213,11 +233,14 @@
       cancel();
     } else if (e.key === "Enter" && phase === "redact") {
       finish();
+    } else if (e.key === " " && phase === "idle" && redactMode && frame) {
+      e.preventDefault();
+      enterRedactStep({ x: 0, y: 0, w: window.innerWidth, h: window.innerHeight });
     }
   });
 
-  document.getElementById("done").addEventListener("mousedown", (e) => e.stopPropagation());
-  document.getElementById("cancel").addEventListener("mousedown", (e) => e.stopPropagation());
+  bar.addEventListener("mousedown", (e) => e.stopPropagation());
+  bar.addEventListener("mouseup", (e) => e.stopPropagation());
   document.getElementById("done").addEventListener("click", () => finish());
   document.getElementById("cancel").addEventListener("click", () => cancel());
 })();
