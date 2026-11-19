@@ -27,8 +27,8 @@ Change them in Settings: click the box and press the keys you want. Windows rese
 1. Create a free GitHub account if you do not have one, then create a new empty repository.
 2. Upload the contents of this folder to it (the `.github` folder must be included).
 3. Open the **Actions** tab, choose **Build Windows app**, and click **Run workflow**.
-4. When it finishes (about 10 minutes the first time), open the run and download **snipzi-windows**.
-5. Inside are two files: an installer (`Snipzi_..._setup.exe`) and `Snipzi-portable.exe`. Use either one.
+4. When it finishes (about 10 minutes the first time), open the run and download **snipzi-windows-vX.Y.Z** (the version is in the name).
+5. Inside are two files: an installer (`Snipzi_..._setup.exe`) and `Snipzi-portable-vX.Y.Z.exe`. Use either one.
 
 To publish a numbered release instead, push a tag such as `v0.1.0`. The files then appear under Releases.
 
