@@ -431,6 +431,12 @@ fn copy_text(text: String) -> Result<(), String> {
     cb.set_text(text).map_err(|e| e.to_string())
 }
 
+/// Sends a file to the Recycle Bin (recoverable) rather than erasing it.
+#[tauri::command]
+fn delete_file(path: String) -> Result<(), String> {
+    trash::delete(&path).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn open_path(app: AppHandle, path: String) -> Result<(), String> {
     app.opener().open_path(path, None::<&str>).map_err(|e| e.to_string())
@@ -614,6 +620,7 @@ fn main() {
             copy_image,
             copy_text,
             open_path,
+            delete_file,
             reveal_path,
             open_url,
             notify_user,
