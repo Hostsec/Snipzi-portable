@@ -9,6 +9,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -52,6 +53,8 @@ struct Capture {
 #[derive(Default)]
 struct AppState {
     cap: Mutex<Capture>,
+    /// "Mark areas to hide before saving" setting, pushed from the main window.
+    redact: AtomicBool,
 }
 
 fn overlay_label(i: usize) -> String {
@@ -223,8 +226,10 @@ fn run_capture(app: &AppHandle, mode: &str) -> Result<(), String> {
     }
 
     ensure_overlays(app, count)?;
+    let redact = app.state::<AppState>().redact.load(Ordering::Relaxed);
     for i in 0..count {
-        app.emit_to(overlay_label(i), "overlay:frame", i).map_err(|e| e.to_string())?;
+        app.emit_to(overlay_label(i), "overlay:frame", serde_json::json!({ "idx": i, "redact": redact }))
+            .map_err(|e| e.to_string())?;
     }
 
     // Safety net: if an overlay never reports back, show whatever is ready after 2 s.
@@ -257,6 +262,11 @@ fn get_frame(state: tauri::State<AppState>, idx: usize) -> Result<Response, Stri
     out.extend_from_slice(&f.h.to_le_bytes());
     out.extend_from_slice(&f.rgba);
     Ok(Response::new(out))
+}
+
+#[tauri::command]
+fn set_redaction(state: tauri::State<AppState>, enabled: bool) {
+    state.redact.store(enabled, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -594,6 +604,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_frame,
             release_frames,
+            set_redaction,
             overlay_ready,
             finish_region,
             cancel_capture,

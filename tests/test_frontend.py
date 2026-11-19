@@ -193,11 +193,12 @@ with sync_playwright() as p:
         ov.add_init_script(f"localStorage.setItem('snipziSettings', JSON.stringify({{redactionEnabled: {str(redact).lower()}}}));")
         ov.goto(BASE + "/overlay.html?i=0")
         ov.evaluate("window.__FRAME = {w: 1600, h: 1200}")
-        ov.evaluate("window.__listeners['overlay:frame'].forEach(cb => cb({payload: 0}))")
+        ov.evaluate("window.__listeners['overlay:frame'].forEach(cb => cb({payload: {idx: 0, redact: %s}}))" % str(redact).lower())
         ov.wait_for_function("window.__calls.some(c => c.cmd === 'overlay_ready')")
         return ov, oerr
 
     ov, oerr = run_overlay(False)
+    check("overlay: plain hint when redaction is off", "hide" not in ov.evaluate("document.getElementById('hint').textContent"))
     check("overlay: painted frame at physical size", ov.evaluate("[document.getElementById('frame').width, document.getElementById('frame').height]") == [1600, 1200])
     ov.mouse.move(100, 100); ov.mouse.down(); ov.mouse.move(300, 250, steps=4); ov.mouse.up()
     ov.wait_for_function("window.__calls.some(c => c.cmd === 'finish_region')")
@@ -206,7 +207,7 @@ with sync_playwright() as p:
     check("overlay: no redactions when off", res["redactions"] == [])
     # tiny click does not finish; Esc cancels
     ov.evaluate("window.__calls.length = 0")
-    ov.evaluate("window.__listeners['overlay:frame'].forEach(cb => cb({payload: 0}))"); ov.wait_for_function("window.__calls.some(c => c.cmd === 'overlay_ready')")
+    ov.evaluate("window.__listeners['overlay:frame'].forEach(cb => cb({payload: {idx: 0, redact: %s}}))" % ('true' if False else 'false')); ov.wait_for_function("window.__calls.some(c => c.cmd === 'overlay_ready')")
     ov.mouse.click(50, 50)
     check("overlay: stray click does not finish", not any(c["cmd"] == "finish_region" for c in ov.evaluate("window.__calls")))
     ov.keyboard.press("Escape"); ov.wait_for_function("window.__calls.some(c => c.cmd === 'cancel_capture')")
@@ -219,6 +220,7 @@ with sync_playwright() as p:
     ov.close()
 
     ov, oerr = run_overlay(True)
+    check("overlay redact: hint says areas can be hidden", "hide" in ov.evaluate("document.getElementById('hint').textContent"))
     ov.mouse.move(100, 100); ov.mouse.down(); ov.mouse.move(400, 300, steps=4); ov.mouse.up()
     check("overlay redact: waits for confirmation", not any(c["cmd"] == "finish_region" for c in ov.evaluate("window.__calls")))
     ov.mouse.move(150, 120); ov.mouse.down(); ov.mouse.move(250, 180, steps=4); ov.mouse.up()

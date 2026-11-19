@@ -45,9 +45,14 @@
     hint.style.display = "block";
   }
 
-  listen("overlay:frame", async () => {
+  const HINT_PLAIN = "Drag to select. Esc or right-click to cancel.";
+  const HINT_REDACT = "Drag to select, then hide private areas before saving. Esc or right-click to cancel.";
+
+  listen("overlay:frame", async (e) => {
     resetUi();
-    redactMode = wantRedaction();
+    // The backend passes the setting along; fall back to shared storage if it is missing.
+    redactMode = e && e.payload && typeof e.payload.redact === "boolean" ? e.payload.redact : wantRedaction();
+    hint.textContent = redactMode ? HINT_REDACT : HINT_PLAIN;
     try {
       const buf = await invoke("get_frame", { idx });
       const dv = new DataView(buf);

@@ -483,9 +483,11 @@
       $("s-" + k).checked = !!s[k];
       $("s-" + k).addEventListener("change", (e) => {
         setSettings({ [k]: e.target.checked });
+        if (k === "redactionEnabled") invoke("set_redaction", { enabled: e.target.checked }).catch(() => {});
         syncDependentUi();
       });
     });
+    invoke("set_redaction", { enabled: !!s.redactionEnabled }).catch(() => {});
     TEXTS.forEach((k) => {
       $("s-" + k).value = s[k] || "";
       $("s-" + k).addEventListener("input", (e) => {
