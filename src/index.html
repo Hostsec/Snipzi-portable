@@ -20,10 +20,23 @@
   <!-- CAPTURE -->
   <section id="view-capture" class="view active">
     <div class="actions">
-      <button id="btn-region" class="big primary"><span>Capture region</span><small id="hk-region-label"></small></button>
-      <button id="btn-screen" class="big"><span>Capture screen</span><small id="hk-screen-label"></small></button>
+      <button id="btn-region" class="big primary"><span>Region</span><em>Drag over the part you want</em><small id="hk-region-label" class="chip"></small></button>
+      <button id="btn-window" class="big"><span>Window</span><em>Click a window to grab it</em><small id="hk-window-label" class="chip"></small></button>
+      <button id="btn-screen" class="big"><span>Whole screen</span><em>The monitor your mouse is on</em><small id="hk-screen-label" class="chip"></small></button>
+      <button id="btn-upload" class="big"><span>Region + upload</span><em>Capture, then send to ImgBay</em><small id="hk-upload-label" class="chip"></small></button>
     </div>
-    <p class="muted">Snipzi keeps running in the tray. Closing this window does not quit it. Use the tray icon menu to quit.</p>
+
+    <div class="card options">
+      <div class="opt-line">
+        <span class="opt-label">Wait before capturing</span>
+        <span class="seg">
+          <button data-delay="0">No delay</button><button data-delay="3">3 s</button><button data-delay="5">5 s</button><button data-delay="10">10 s</button>
+        </span>
+      </div>
+      <p class="muted small">Use a delay to capture menus and tooltips: start the capture, then open the menu.</p>
+      <label class="opt-line check"><input type="checkbox" id="c-edit"> Edit before saving (draw arrows, text, blur or hide parts)</label>
+    </div>
+    <p class="muted small">Snipzi keeps running in the tray, so closing this window does not quit it. Use the tray icon menu to quit. Press Esc during a capture to cancel.</p>
 
     <div id="last-card" class="card hidden">
       <h3>Last screenshot</h3>
@@ -40,7 +53,7 @@
         <button id="last-folder">Show in folder</button>
         <button id="last-copy">Copy image</button>
         <button id="last-upload" class="hidden">Upload to ImgBay</button>
-        <button id="last-dismiss">Dismiss</button>
+        <button id="last-dismiss" title="Only removes this panel. The file and History stay.">Dismiss</button>
       </div>
     </div>
     <div id="status" class="status"></div>
@@ -59,26 +72,58 @@
   <!-- SETTINGS -->
   <section id="view-settings" class="view">
     <h2>Shortcuts</h2>
-    <label class="row">Capture region
-      <input id="hk-region" class="hk" readonly placeholder="Press a key combination">
-    </label>
-    <label class="row">Capture screen
-      <input id="hk-screen" class="hk" readonly placeholder="Press a key combination">
-    </label>
-    <p class="muted small">Click a box, then press the keys you want. Backspace clears it. Screen capture takes the monitor your mouse is on. To use PrintScreen, turn off its Snipping Tool shortcut in Windows settings first.</p>
+    <p class="help">Click a box, then press the keys you want. Backspace clears it.</p>
+    <label class="row">Region <input id="hk-region" class="hk" readonly placeholder="Press a key combination"></label>
+    <label class="row">Window <input id="hk-window" class="hk" readonly placeholder="Press a key combination"></label>
+    <label class="row">Whole screen <input id="hk-screen" class="hk" readonly placeholder="Press a key combination"></label>
+    <label class="row">Region + upload <input id="hk-upload" class="hk" readonly placeholder="Press a key combination"></label>
+    <div class="btn-row"><button data-reset-hotkeys>Reset shortcuts</button></div>
+    <p class="help">To use PrintScreen, first turn off its Snipping Tool shortcut in Windows settings.</p>
     <div id="hk-error" class="error hidden"></div>
 
-    <h2>After a capture</h2>
-    <label class="row check"><input type="checkbox" id="s-saveToFile"> Save to a file</label>
-    <label class="row">Save folder
-      <input id="s-saveDir" type="text" placeholder="">
-    </label>
-    <label class="row check"><input type="checkbox" id="s-copyToClipboard"> Copy the image to the clipboard</label>
-    <label class="row check"><input type="checkbox" id="s-notify"> Show a notification</label>
+    <h2>While capturing</h2>
+    <label class="row check"><input type="checkbox" id="s-editBeforeSave"> <span>Edit before saving<small class="help">After you select an area, a toolbar lets you adjust it and add arrows, text, blur or hide. Off means the capture is saved the moment you let go. You can still hold Shift when you let go to edit just once.</small></span></label>
+    <label class="row check"><input type="checkbox" id="s-keepOverlays"> <span>Fast capture<small class="help">Keeps the capture screens ready in the background so shortcuts react instantly. Turn it off to save some memory; captures then start a little slower.</small></span></label>
 
-    <h2>Screenshot content</h2>
-    <label class="row check"><input type="checkbox" id="s-redactionEnabled"> Mark areas to hide before saving (region capture)</label>
-    <label class="row check"><input type="checkbox" id="s-watermarkEnabled"> Add a watermark</label>
+    <h2>After a capture</h2>
+    <label class="row check"><input type="checkbox" id="s-saveToFile"> <span>Save to a file</span></label>
+    <div class="row">Save folder
+      <input id="s-saveDir" type="text" placeholder="">
+    </div>
+    <div class="btn-row"><button id="browse-dir">Browse...</button><button id="open-dir">Open folder</button><button id="reset-dir" title="Use the default Pictures folder">Use default</button></div>
+    <label class="row check"><input type="checkbox" id="s-copyToClipboard"> <span>Copy the image to the clipboard</span></label>
+    <label class="row check"><input type="checkbox" id="s-notify"> <span>Show a notification</span></label>
+    <label class="row check"><input type="checkbox" id="s-popupEnabled"> <span>Show a small pop-up<small class="help">A little card with the thumbnail and buttons to copy, upload or open the file. It replaces the notification.</small></span></label>
+    <div id="popup-opts" class="indent">
+      <label class="row">Stays for <input id="s-popupSeconds" type="range" min="2" max="20" step="1"> <span id="popup-val" class="muted"></span></label>
+    </div>
+
+    <h2>File name and format</h2>
+    <label class="row">Format
+      <select id="s-format"><option value="png">PNG (sharpest)</option><option value="jpeg">JPEG (smaller)</option><option value="webp">WebP (smaller)</option><option value="pdf">PDF</option></select>
+    </label>
+    <label class="row" id="q-row">Quality <input id="s-quality" type="range" min="0.3" max="1" step="0.01"> <span id="q-val" class="muted"></span></label>
+    <label class="row">File name
+      <input id="s-filenameTemplate" type="text" placeholder="snipzi-{type}-{date}_{time}">
+    </label>
+    <div class="chips" data-for="filename">
+      <button class="chipbtn" data-token="{date}" data-target="s-filenameTemplate">date</button>
+      <button class="chipbtn" data-token="{time}" data-target="s-filenameTemplate">time</button>
+      <button class="chipbtn" data-token="{type}" data-target="s-filenameTemplate">type</button>
+    </div>
+    <label class="row">Subfolder
+      <input id="s-folderTemplate" type="text" placeholder="Screenshots/{year}-{month}">
+    </label>
+    <div class="chips">
+      <button class="chipbtn" data-token="{year}" data-target="s-folderTemplate">year</button>
+      <button class="chipbtn" data-token="{month}" data-target="s-folderTemplate">month</button>
+      <button class="chipbtn" data-token="{date}" data-target="s-folderTemplate">date</button>
+      <button class="chipbtn" data-token="{type}" data-target="s-folderTemplate">type</button>
+    </div>
+    <p class="help">Click a word to add it. Leave a box empty for the default. A file is never overwritten. Example: <b id="example-name"></b></p>
+
+    <h2>Watermark</h2>
+    <label class="row check"><input type="checkbox" id="s-watermarkEnabled"> <span>Add a watermark to every screenshot</span></label>
     <div id="wm-opts" class="indent">
       <label class="row">Text <input id="s-watermarkText" type="text" placeholder="Confidential"></label>
       <label class="row">Style
@@ -87,32 +132,20 @@
       <label class="row">Opacity <input id="s-watermarkOpacity" type="range" min="0.05" max="1" step="0.05"> <span id="wm-op-val" class="muted"></span></label>
     </div>
 
-    <h2>File output</h2>
-    <label class="row">Format
-      <select id="s-format"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP</option><option value="pdf">PDF</option></select>
-    </label>
-    <label class="row" id="q-row">Quality <input id="s-quality" type="range" min="0.3" max="1" step="0.01"> <span id="q-val" class="muted"></span></label>
-    <label class="row">File name pattern
-      <input id="s-filenameTemplate" type="text" placeholder="snipzi-{type}-{date}_{time}">
-    </label>
-    <label class="row">Subfolder pattern
-      <input id="s-folderTemplate" type="text" placeholder="Screenshots/{year}-{month}">
-    </label>
-    <p class="muted small">Tokens: {date} {time} {year} {month} {type}. Leave a pattern blank for the default.</p>
-
-    <h2>ImgBay</h2>
+    <h2>ImgBay upload</h2>
+    <p class="help">Optional. Fill in your ImgBay address to upload screenshots and get a link.</p>
     <label class="row">Address <input id="s-imgbayUrl" type="text" placeholder="https://img.example.com/imgbay/"></label>
-    <label class="row">Expires
+    <label class="row">Link expires
       <select id="s-imgbayExpiry">
-        <option value="10m">10 minutes</option><option value="30m">30 minutes</option><option value="1h">1 hour</option>
-        <option value="12h">12 hours</option><option value="7d">7 days</option><option value="14d">14 days</option>
-        <option value="1mo">1 month</option><option value="6mo">6 months</option><option value="1y">1 year</option><option value="never">Never</option>
+        <option value="10m">After 10 minutes</option><option value="30m">After 30 minutes</option><option value="1h">After 1 hour</option>
+        <option value="12h">After 12 hours</option><option value="7d">After 7 days</option><option value="14d">After 14 days</option>
+        <option value="1mo">After 1 month</option><option value="6mo">After 6 months</option><option value="1y">After 1 year</option><option value="never">Never</option>
       </select>
     </label>
     <label class="row">Who can see it
       <select id="s-imgbayVisibility"><option value="link">Anyone with the link</option><option value="private">Only me and admins</option></select>
     </label>
-    <label class="row check"><input type="checkbox" id="s-imgbayAuto"> Upload every capture automatically and copy the link</label>
+    <label class="row check"><input type="checkbox" id="s-imgbayAuto"> <span>Upload every capture automatically and copy the link</span></label>
     <div class="btn-row">
       <button id="imgbay-login">Log in to ImgBay</button>
       <button id="imgbay-check">Check login</button>
@@ -120,13 +153,14 @@
     <div id="imgbay-msg" class="muted small"></div>
 
     <h2>App</h2>
-    <label class="row check"><input type="checkbox" id="s-autostart"> Start Snipzi when I sign in to Windows</label>
-    <p class="muted small">Version 0.1.3</p>
+    <label class="row check"><input type="checkbox" id="s-autostart"> <span>Start Snipzi when I sign in to Windows</span></label>
+    <p class="muted small">Version 0.2.0</p>
   </section>
 </main>
 
 <div id="toast" class="toast hidden"></div>
 <script src="pipeline.js"></script>
+<script src="annotate.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

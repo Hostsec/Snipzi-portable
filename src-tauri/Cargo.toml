@@ -1,6 +1,6 @@
 [package]
 name = "snipzi"
-version = "0.1.3"
+version = "0.2.0"
 description = "Snipzi desktop: quick screen and region screenshots"
 edition = "2021"
 
@@ -14,6 +14,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"
 xcap = "0.9"
 arboard = "3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "multipart"] }

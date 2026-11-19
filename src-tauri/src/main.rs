@@ -8,19 +8,20 @@
 //    and an HTTP bridge so the ImgBay upload can use the in-app login cookies.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
-    WindowEvent,
+    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
@@ -29,6 +30,8 @@ use tauri_plugin_opener::OpenerExt;
 
 const DEFAULT_REGION_KEY: &str = "Ctrl+Shift+1";
 const DEFAULT_SCREEN_KEY: &str = "Ctrl+Shift+2";
+const DEFAULT_WINDOW_KEY: &str = "Ctrl+Shift+3";
+const DEFAULT_UPLOAD_KEY: &str = "Ctrl+Shift+4";
 
 struct Frame {
     x: i32,
@@ -38,23 +41,53 @@ struct Frame {
     rgba: Vec<u8>,
 }
 
+#[derive(Clone)]
+struct WinRect {
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    title: String,
+}
+
 #[derive(Default)]
 struct Capture {
     frames: Vec<Frame>,
-    /// A capture (screen grab or overlay session) is in progress; ignore further hotkey presses.
+    windows: Vec<WinRect>,
+    /// A capture (countdown, screen grab or overlay session) is in progress; ignore hotkeys.
     busy: bool,
     /// Overlays that have not yet reported "frame drawn".
     pending_overlays: usize,
     focus_idx: usize,
     /// Bumped per capture so stale timeouts do not act on a newer capture.
     generation: u64,
+    /// "region", "window" or "screen".
+    mode: String,
+    /// Upload to ImgBay once saved (the "capture and upload" shortcut).
+    upload: bool,
+    countdown: u32,
+}
+
+#[derive(Clone, Copy)]
+struct Options {
+    edit_before_save: bool,
+    delay_secs: u32,
+    keep_overlays: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Options { edit_before_save: false, delay_secs: 0, keep_overlays: true }
+    }
 }
 
 #[derive(Default)]
 struct AppState {
     cap: Mutex<Capture>,
-    /// "Mark areas to hide before saving" setting, pushed from the main window.
-    redact: AtomicBool,
+    opts: Mutex<Options>,
+    /// Overlay windows whose page has loaded and is listening for frames.
+    loaded: Mutex<HashSet<usize>>,
+    popup: Mutex<Option<Value>>,
 }
 
 fn overlay_label(i: usize) -> String {
@@ -62,7 +95,7 @@ fn overlay_label(i: usize) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Screen grabbing
+// Screen and window grabbing
 // ---------------------------------------------------------------------------
 
 fn grab_all() -> Result<Vec<Frame>, String> {
@@ -94,6 +127,61 @@ fn grab_all() -> Result<Vec<Frame>, String> {
     Ok(frames)
 }
 
+/// Visible top-level windows, topmost first.
+fn list_windows() -> Vec<WinRect> {
+    let mut found: Vec<(i32, WinRect)> = Vec::new();
+    if let Ok(all) = xcap::Window::all() {
+        for w in all {
+            let (Ok(x), Ok(y), Ok(ww), Ok(hh)) = (w.x(), w.y(), w.width(), w.height()) else {
+                continue;
+            };
+            if w.is_minimized().unwrap_or(false) || ww < 40 || hh < 40 {
+                continue;
+            }
+            let mut title = w.title().unwrap_or_default();
+            if title.trim().is_empty() {
+                title = w.app_name().unwrap_or_default();
+            }
+            found.push((w.z().unwrap_or(0), WinRect { x, y, w: ww, h: hh, title }));
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.into_iter().map(|(_, r)| r).collect()
+}
+
+/// The windows that touch one monitor, in that monitor's own pixel coordinates.
+fn windows_for(frame: &Frame, wins: &[WinRect]) -> Vec<Value> {
+    let mut out = Vec::new();
+    for w in wins {
+        let x0 = (w.x - frame.x).max(0);
+        let y0 = (w.y - frame.y).max(0);
+        let x1 = (w.x + w.w as i32 - frame.x).min(frame.w as i32);
+        let y1 = (w.y + w.h as i32 - frame.y).min(frame.h as i32);
+        if x1 - x0 < 20 || y1 - y0 < 20 {
+            continue;
+        }
+        out.push(json!({ "x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "title": w.title }));
+    }
+    out
+}
+
+fn cursor_monitor(app: &AppHandle) -> Option<tauri::Monitor> {
+    let p = app.cursor_position().ok()?;
+    let monitors = app.available_monitors().ok()?;
+    for m in &monitors {
+        let pos = m.position();
+        let size = m.size();
+        if p.x >= pos.x as f64
+            && p.x < (pos.x + size.width as i32) as f64
+            && p.y >= pos.y as f64
+            && p.y < (pos.y + size.height as i32) as f64
+        {
+            return Some(m.clone());
+        }
+    }
+    monitors.into_iter().next()
+}
+
 fn monitor_under_cursor(app: &AppHandle, frames: &[Frame]) -> usize {
     if let Ok(p) = app.cursor_position() {
         let (cx, cy) = (p.x as i32, p.y as i32);
@@ -107,7 +195,8 @@ fn monitor_under_cursor(app: &AppHandle, frames: &[Frame]) -> usize {
 }
 
 // ---------------------------------------------------------------------------
-// Overlay windows (one per monitor, created hidden at startup, reused)
+// Overlay windows (one per monitor). Kept hidden and ready, or created on demand
+// when "fast capture" is off.
 // ---------------------------------------------------------------------------
 
 fn ensure_overlays(app: &AppHandle, count: usize) -> Result<(), String> {
@@ -139,6 +228,15 @@ fn hide_overlays(app: &AppHandle) {
     }
 }
 
+fn destroy_overlays(app: &AppHandle) {
+    for (label, win) in app.webview_windows() {
+        if label.starts_with("overlay-") {
+            let _ = win.destroy();
+        }
+    }
+    app.state::<AppState>().loaded.lock().unwrap().clear();
+}
+
 fn show_overlays(app: &AppHandle) {
     let state = app.state::<AppState>();
     let (geoms, focus_idx): (Vec<(i32, i32, u32, u32)>, usize) = {
@@ -162,14 +260,28 @@ fn show_overlays(app: &AppHandle) {
     }
 }
 
-fn reset_capture(app: &AppHandle, clear_frames: bool) {
+/// Ends an overlay session: hide (or destroy, in memory-saving mode) the overlays and
+/// allow the next capture.
+fn finish_session(app: &AppHandle, clear_frames: bool) {
     hide_overlays(app);
-    let state = app.state::<AppState>();
-    let mut cap = state.cap.lock().unwrap();
-    cap.busy = false;
-    cap.pending_overlays = 0;
-    if clear_frames {
-        cap.frames.clear();
+    let keep = app.state::<AppState>().opts.lock().unwrap().keep_overlays;
+    let app2 = app.clone();
+    let work = move || {
+        if !keep {
+            destroy_overlays(&app2);
+        }
+        let state = app2.state::<AppState>();
+        let mut cap = state.cap.lock().unwrap();
+        cap.busy = false;
+        cap.pending_overlays = 0;
+        if clear_frames {
+            cap.frames.clear();
+        }
+    };
+    if keep {
+        work();
+    } else {
+        std::thread::spawn(work);
     }
 }
 
@@ -177,9 +289,54 @@ fn notify(app: &AppHandle, title: &str, body: &str) {
     let _ = app.notification().builder().title(title).body(body).show();
 }
 
-/// Starts a capture. `mode` is "region" or "screen". `delay_ms` lets a window that was just
-/// hidden (the Snipzi window itself) disappear before the grab.
-fn begin_capture(app: &AppHandle, mode: &str, delay_ms: u64) {
+// ---------------------------------------------------------------------------
+// Small helper windows: countdown and post-capture pop-up
+// ---------------------------------------------------------------------------
+
+fn place_on_cursor_monitor(app: &AppHandle, win: &WebviewWindow, w: f64, h: f64, corner: bool) {
+    if let Some(m) = cursor_monitor(app) {
+        let s = m.scale_factor();
+        let wa = m.work_area();
+        let (pw, ph) = ((w * s) as u32, (h * s) as u32);
+        let margin = (16.0 * s) as i32;
+        let (x, y) = if corner {
+            (
+                wa.position.x + wa.size.width as i32 - pw as i32 - margin,
+                wa.position.y + wa.size.height as i32 - ph as i32 - margin,
+            )
+        } else {
+            (
+                wa.position.x + (wa.size.width as i32 - pw as i32) / 2,
+                wa.position.y + (wa.size.height as i32 - ph as i32) / 2,
+            )
+        };
+        let _ = win.set_size(PhysicalSize::new(pw, ph));
+        let _ = win.set_position(PhysicalPosition::new(x, y));
+    }
+}
+
+fn helper_window(app: &AppHandle, label: &str, url: &str, w: f64, h: f64) -> Result<WebviewWindow, String> {
+    WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
+        .title("Snipzi")
+        .inner_size(w, h)
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .focused(false)
+        .focusable(false)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Capture flow
+// ---------------------------------------------------------------------------
+
+/// Starts a capture. `mode` is "region", "window" or "screen". `extra_delay_ms` lets a window
+/// that was just hidden disappear first; the user's own delay timer is added on top.
+fn begin_capture(app: &AppHandle, mode: &str, extra_delay_ms: u64, upload: bool) {
     {
         let state = app.state::<AppState>();
         let mut cap = state.cap.lock().unwrap();
@@ -188,22 +345,47 @@ fn begin_capture(app: &AppHandle, mode: &str, delay_ms: u64) {
         }
         cap.busy = true;
         cap.generation += 1;
+        cap.mode = mode.to_string();
+        cap.upload = upload;
     }
     let app = app.clone();
     let mode = mode.to_string();
     std::thread::spawn(move || {
-        if delay_ms > 0 {
-            std::thread::sleep(Duration::from_millis(delay_ms));
+        if extra_delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(extra_delay_ms));
+        }
+        let secs = app.state::<AppState>().opts.lock().unwrap().delay_secs;
+        if secs > 0 {
+            run_countdown(&app, secs);
         }
         if let Err(e) = run_capture(&app, &mode) {
-            reset_capture(&app, true);
+            finish_session(&app, true);
             notify(&app, "Snipzi", &format!("Capture failed: {e}"));
         }
     });
 }
 
+fn run_countdown(app: &AppHandle, secs: u32) {
+    let win = helper_window(app, "countdown", "countdown.html", 150.0, 150.0).ok();
+    if let Some(w) = &win {
+        place_on_cursor_monitor(app, w, 150.0, 150.0, false);
+        let _ = w.show();
+    }
+    for n in (1..=secs).rev() {
+        app.state::<AppState>().cap.lock().unwrap().countdown = n;
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    app.state::<AppState>().cap.lock().unwrap().countdown = 0;
+    if let Some(w) = win {
+        let _ = w.destroy();
+    }
+    // Let the countdown window disappear from the screen before grabbing it.
+    std::thread::sleep(Duration::from_millis(250));
+}
+
 fn run_capture(app: &AppHandle, mode: &str) -> Result<(), String> {
     let frames = grab_all()?;
+    let windows = if mode == "window" { list_windows() } else { Vec::new() };
     let idx = monitor_under_cursor(app, &frames);
     let count = frames.len();
     let generation;
@@ -211,6 +393,7 @@ fn run_capture(app: &AppHandle, mode: &str) -> Result<(), String> {
         let state = app.state::<AppState>();
         let mut cap = state.cap.lock().unwrap();
         cap.frames = frames;
+        cap.windows = windows;
         cap.focus_idx = idx;
         generation = cap.generation;
         if mode == "screen" {
@@ -221,15 +404,42 @@ fn run_capture(app: &AppHandle, mode: &str) -> Result<(), String> {
     }
 
     if mode == "screen" {
-        app.emit_to("main", "capture:screen", idx).map_err(|e| e.to_string())?;
+        app.emit_to("main", "capture:screen", json!({ "idx": idx })).map_err(|e| e.to_string())?;
         return Ok(());
     }
 
     ensure_overlays(app, count)?;
-    let redact = app.state::<AppState>().redact.load(Ordering::Relaxed);
+    // Overlays created on demand (memory-saving mode) need a moment to load their page.
+    for _ in 0..300 {
+        let ready = {
+            let state = app.state::<AppState>();
+            let loaded = state.loaded.lock().unwrap();
+            (0..count).all(|i| loaded.contains(&i))
+        };
+        if ready {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let (edit, upload) = {
+        let state = app.state::<AppState>();
+        let edit = state.opts.lock().unwrap().edit_before_save;
+        let upload = state.cap.lock().unwrap().upload;
+        (edit, upload)
+    };
     for i in 0..count {
-        app.emit_to(overlay_label(i), "overlay:frame", serde_json::json!({ "idx": i, "redact": redact }))
-            .map_err(|e| e.to_string())?;
+        let wins = {
+            let state = app.state::<AppState>();
+            let cap = state.cap.lock().unwrap();
+            if mode == "window" { windows_for(&cap.frames[i], &cap.windows) } else { Vec::new() }
+        };
+        app.emit_to(
+            overlay_label(i),
+            "overlay:frame",
+            json!({ "idx": i, "mode": mode, "edit": edit, "upload": upload, "windows": wins }),
+        )
+        .map_err(|e| e.to_string())?;
     }
 
     // Safety net: if an overlay never reports back, show whatever is ready after 2 s.
@@ -265,16 +475,16 @@ fn get_frame(state: tauri::State<AppState>, idx: usize) -> Result<Response, Stri
 }
 
 #[tauri::command]
-fn set_redaction(state: tauri::State<AppState>, enabled: bool) {
-    state.redact.store(enabled, Ordering::Relaxed);
-}
-
-#[tauri::command]
 fn release_frames(state: tauri::State<AppState>) {
     let mut cap = state.cap.lock().unwrap();
     if !cap.busy {
         cap.frames.clear();
     }
+}
+
+#[tauri::command]
+fn overlay_loaded(state: tauri::State<AppState>, idx: usize) {
+    state.loaded.lock().unwrap().insert(idx);
 }
 
 #[tauri::command]
@@ -301,22 +511,30 @@ struct RegionResult {
     y: u32,
     w: u32,
     h: u32,
-    redactions: Vec<[u32; 4]>,
+    /// Annotations drawn in the editor (arrows, text, hide boxes ...), in monitor pixels.
+    shapes: Vec<Value>,
+    /// The user clicked "Save and upload" in the editor.
+    upload: bool,
 }
 
 #[tauri::command]
 fn finish_region(app: AppHandle, result: RegionResult) {
-    hide_overlays(&app);
-    {
+    let (kind, upload) = {
         let state = app.state::<AppState>();
-        state.cap.lock().unwrap().busy = false;
-    }
-    let _ = app.emit_to("main", "capture:region", result);
+        let cap = state.cap.lock().unwrap();
+        (cap.mode.clone(), cap.upload || result.upload)
+    };
+    let payload = json!({
+        "idx": result.idx, "x": result.x, "y": result.y, "w": result.w, "h": result.h,
+        "shapes": result.shapes, "kind": kind, "upload": upload,
+    });
+    let _ = app.emit_to("main", "capture:region", payload);
+    finish_session(&app, false);
 }
 
 #[tauri::command]
 fn cancel_capture(app: AppHandle) {
-    reset_capture(&app, true);
+    finish_session(&app, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -333,7 +551,106 @@ fn start_capture(app: AppHandle, mode: String) {
             delay = 250;
         }
     }
-    begin_capture(&app, &mode, delay);
+    let upload = mode == "upload";
+    let real_mode = if upload { "region".to_string() } else { mode };
+    begin_capture(&app, &real_mode, delay, upload);
+}
+
+#[derive(Deserialize)]
+struct OptionsArg {
+    edit_before_save: bool,
+    delay_secs: u32,
+    keep_overlays: bool,
+}
+
+#[tauri::command]
+fn set_options(app: AppHandle, options: OptionsArg) {
+    let keep_before;
+    {
+        let state = app.state::<AppState>();
+        let mut o = state.opts.lock().unwrap();
+        keep_before = o.keep_overlays;
+        o.edit_before_save = options.edit_before_save;
+        o.delay_secs = options.delay_secs.min(60);
+        o.keep_overlays = options.keep_overlays;
+    }
+    if keep_before != options.keep_overlays {
+        let app2 = app.clone();
+        std::thread::spawn(move || {
+            let busy = app2.state::<AppState>().cap.lock().unwrap().busy;
+            if busy {
+                return;
+            }
+            if options.keep_overlays {
+                let n = xcap::Monitor::all().map(|m| m.len()).unwrap_or(1).max(1);
+                let _ = ensure_overlays(&app2, n);
+            } else {
+                destroy_overlays(&app2);
+            }
+        });
+    }
+}
+
+#[tauri::command]
+fn get_countdown(state: tauri::State<AppState>) -> u32 {
+    state.cap.lock().unwrap().countdown
+}
+
+// ----- post-capture pop-up -----
+
+#[tauri::command]
+async fn show_popup(app: AppHandle, payload: Value) -> Result<(), String> {
+    *app.state::<AppState>().popup.lock().unwrap() = Some(payload);
+    let (w, h) = (340.0, 232.0);
+    if let Some(win) = app.get_webview_window("popup") {
+        place_on_cursor_monitor(&app, &win, w, h, true);
+        let _ = win.show();
+        let _ = app.emit_to("popup", "popup:update", ());
+        return Ok(());
+    }
+    let win = helper_window(&app, "popup", "popup.html", w, h)?;
+    place_on_cursor_monitor(&app, &win, w, h, true);
+    let _ = win.show();
+    Ok(())
+}
+
+#[tauri::command]
+fn get_popup(state: tauri::State<AppState>) -> Option<Value> {
+    state.popup.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn popup_action(app: AppHandle, action: String) {
+    let _ = app.emit_to("main", "popup:action", action);
+}
+
+#[tauri::command]
+fn close_popup(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("popup") {
+        let _ = w.destroy();
+    }
+}
+
+// ----- folders -----
+
+#[tauri::command]
+async fn pick_folder(app: AppHandle, start: Option<String>) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut dialog = app.dialog().file();
+    if let Some(s) = start.filter(|s| !s.trim().is_empty()) {
+        dialog = dialog.set_directory(s);
+    }
+    dialog
+        .blocking_pick_folder()
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn open_save_folder(app: AppHandle, dir: String) -> Result<(), String> {
+    let path = if dir.trim().is_empty() { default_save_dir(&app) } else { PathBuf::from(dir.trim()) };
+    std::fs::create_dir_all(&path).map_err(|e| format!("Could not create the folder: {e}"))?;
+    app.opener().open_path(path.to_string_lossy().to_string(), None::<&str>).map_err(|e| e.to_string())
 }
 
 fn header_b64(req: &Request, name: &str) -> Option<String> {
@@ -454,29 +771,38 @@ fn notify_user(app: AppHandle, title: String, body: String) {
     notify(&app, &title, &body);
 }
 
-#[tauri::command]
-fn set_hotkeys(app: AppHandle, region: String, screen: String) -> Result<(), String> {
-    register_hotkeys(&app, &region, &screen)
+#[derive(Deserialize)]
+struct HotkeyArgs {
+    region: String,
+    screen: String,
+    window: String,
+    upload: String,
 }
 
-fn register_hotkeys(app: &AppHandle, region: &str, screen: &str) -> Result<(), String> {
+#[tauri::command]
+fn set_hotkeys(app: AppHandle, keys: HotkeyArgs) -> Result<(), String> {
+    register_hotkeys(&app, &keys.region, &keys.screen, &keys.window, &keys.upload)
+}
+
+fn register_hotkeys(app: &AppHandle, region: &str, screen: &str, window: &str, upload: &str) -> Result<(), String> {
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(|e| e.to_string())?;
-    if !region.trim().is_empty() {
-        gs.on_shortcut(region, |app, _s, ev| {
+    let jobs: [(&str, &str, &str, bool); 4] = [
+        (region, "region", "region capture", false),
+        (screen, "screen", "screen capture", false),
+        (window, "window", "window capture", false),
+        (upload, "region", "capture and upload", true),
+    ];
+    for (key, mode, label, up) in jobs {
+        if key.trim().is_empty() {
+            continue;
+        }
+        gs.on_shortcut(key, move |app, _s, ev| {
             if ev.state == ShortcutState::Pressed {
-                begin_capture(app, "region", 0);
+                begin_capture(app, mode, 0, up);
             }
         })
-        .map_err(|e| format!("Could not use \"{region}\" for region capture: {e}"))?;
-    }
-    if !screen.trim().is_empty() {
-        gs.on_shortcut(screen, |app, _s, ev| {
-            if ev.state == ShortcutState::Pressed {
-                begin_capture(app, "screen", 0);
-            }
-        })
-        .map_err(|e| format!("Could not use \"{screen}\" for screen capture: {e}"))?;
+        .map_err(|e| format!("Could not use \"{key}\" for {label}: {e}"))?;
     }
     Ok(())
 }
@@ -600,11 +926,12 @@ fn main() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             get_frame,
             release_frames,
-            set_redaction,
+            overlay_loaded,
             overlay_ready,
             finish_region,
             cancel_capture,
@@ -618,6 +945,14 @@ fn main() {
             open_url,
             notify_user,
             set_hotkeys,
+            set_options,
+            get_countdown,
+            show_popup,
+            get_popup,
+            popup_action,
+            close_popup,
+            pick_folder,
+            open_save_folder,
             get_autostart,
             set_autostart,
             http_request,
@@ -637,17 +972,19 @@ fn main() {
 
             // Tray icon and menu.
             let m_region = MenuItem::with_id(app, "region", "Capture region", true, None::<&str>)?;
+            let m_window = MenuItem::with_id(app, "window", "Capture window", true, None::<&str>)?;
             let m_screen = MenuItem::with_id(app, "screen", "Capture screen", true, None::<&str>)?;
             let m_open = MenuItem::with_id(app, "open", "Open Snipzi", true, None::<&str>)?;
             let m_quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&m_region, &m_screen, &m_open, &m_quit])?;
+            let menu = Menu::with_items(app, &[&m_region, &m_window, &m_screen, &m_open, &m_quit])?;
             let mut tray = TrayIconBuilder::new()
                 .tooltip("Snipzi")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, ev| match ev.id.as_ref() {
-                    "region" => begin_capture(app, "region", 150),
-                    "screen" => begin_capture(app, "screen", 150),
+                    "region" => begin_capture(app, "region", 150, false),
+                    "window" => begin_capture(app, "window", 150, false),
+                    "screen" => begin_capture(app, "screen", 150, false),
                     "open" => show_main(app),
                     "quit" => app.exit(0),
                     _ => {}
@@ -663,7 +1000,7 @@ fn main() {
             tray.build(app)?;
 
             // Default hotkeys right away; the frontend re-registers the user's own on load.
-            if let Err(e) = register_hotkeys(&handle, DEFAULT_REGION_KEY, DEFAULT_SCREEN_KEY) {
+            if let Err(e) = register_hotkeys(&handle, DEFAULT_REGION_KEY, DEFAULT_SCREEN_KEY, DEFAULT_WINDOW_KEY, DEFAULT_UPLOAD_KEY) {
                 eprintln!("hotkeys: {e}");
             }
 

@@ -19,6 +19,8 @@ main { padding: 16px; max-width: 640px; margin: 0 auto; }
 h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 22px 0 8px; }
 h3 { margin: 0 0 10px; font-size: 14px; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.big em { font-style: normal; font-weight: 400; font-size: 12px; opacity: 0.8; }
+button.big .chip { background: rgba(127,127,127,.22); padding: 2px 8px; border-radius: 10px; margin-top: 4px; }
 button { font: inherit; color: var(--btn-fg); background: var(--btn); border: 0; border-radius: 8px; padding: 7px 12px; cursor: pointer; }
 button:hover { filter: brightness(0.96); }
 button.big { padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; align-items: center; font-size: 15px; font-weight: 600; }
@@ -49,3 +51,15 @@ button.primary small { color: rgba(255, 255, 255, 0.85); }
 .error { color: var(--err); margin-top: 6px; }
 .status { margin-top: 12px; min-height: 18px; color: var(--muted); }
 .toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: #22222e; color: #fff; padding: 9px 14px; border-radius: 8px; max-width: 90%; z-index: 10; }
+.options { margin-top: 14px; }
+.opt-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; }
+.opt-line.check { justify-content: flex-start; }
+.opt-label { font-weight: 600; }
+.seg { display: inline-flex; background: var(--btn); border-radius: 8px; padding: 2px; gap: 2px; }
+.seg button { background: transparent; padding: 5px 10px; }
+.seg button.on { background: var(--accent); color: #fff; }
+.help { display: block; color: var(--muted); font-size: 12px; margin: 2px 0 4px; font-weight: 400; }
+.row.check { align-items: flex-start; }
+.row.check input { margin-top: 3px; }
+.chips { display: flex; gap: 6px; margin: 0 0 6px; justify-content: flex-end; }
+.chipbtn { padding: 2px 9px; border-radius: 10px; font-size: 12px; }

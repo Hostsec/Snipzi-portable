@@ -8,6 +8,8 @@ Quick screenshots of your whole screen or any part of it. Snipzi lives in the sy
 - **Capture screen**: grabs the whole monitor your mouse is on.
 - **Hide areas before saving** (optional): after dragging a region, draw solid black boxes over anything private. Click a box to remove it.
 - **Watermark** (optional): a single centered stamp or a tiled pattern, with adjustable opacity.
+- **Editor** after you select an area (turn on "Edit before saving", or hold Shift when you let go): resize or move the area, then add arrows, boxes, circles, pen, highlight, text, numbered markers, blur or a solid black hide box.
+- **Window capture**, **delay timer** (3, 5 or 10 seconds, for menus and tooltips), an optional **pop-up** after each capture, a folder picker, and a **fast capture** switch you can turn off to save memory.
 - **Save as** PNG, JPEG, WebP or PDF, with your own file name pattern and subfolders.
 - **Copy to clipboard** and **save to a file**, either or both.
 - **History** of your last 20 captures.
@@ -19,6 +21,8 @@ Quick screenshots of your whole screen or any part of it. Snipzi lives in the sy
 |---|---|
 | Capture region | Ctrl+Shift+1 |
 | Capture screen | Ctrl+Shift+2 |
+| Capture window (click it) | Ctrl+Shift+3 |
+| Capture region and upload to ImgBay | Ctrl+Shift+4 |
 
 Change them in Settings: click the box and press the keys you want. Windows reserves PrintScreen for the Snipping Tool by default. To use it here, turn that off in Windows Settings under Accessibility, Keyboard.
 

@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Snipzi</title>
+<style>
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font:13px "Segoe UI",system-ui,sans-serif;user-select:none}
+  .card{box-sizing:border-box;width:100%;height:100%;padding:12px;background:#1d1d2b;color:#fff;border:1px solid #3a3a52;border-radius:12px;display:flex;flex-direction:column;gap:8px;position:relative}
+  #x{position:absolute;right:8px;top:6px;border:0;background:none;color:#b9b9d0;font-size:16px;cursor:pointer}
+  #x:hover{color:#fff}
+  .top{display:flex;gap:10px;align-items:center;min-height:0}
+  img{width:120px;height:80px;object-fit:contain;background:#12121c;border-radius:6px;flex:none}
+  #name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:170px}
+  #meta{color:#a9a9c0;font-size:12px;margin-top:2px}
+  #msg{color:#7ee0a0;font-size:12px;margin-top:4px;min-height:14px}
+  .row{display:flex;gap:6px}
+  button.a{flex:1;padding:7px 4px;border:0;border-radius:6px;background:#34344a;color:#fff;font:inherit;cursor:pointer}
+  button.a:hover{background:#45455f}
+  button.a:disabled{opacity:.4;cursor:default}
+  .bar{height:3px;background:#34344a;border-radius:2px;overflow:hidden;margin-top:auto}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,#ff5d7a,#6c4ae6);width:100%}
+</style></head>
+<body><div class="card">
+  <button id="x" title="Close">&#x2715;</button>
+  <div class="top"><img id="img" alt=""><div><div id="name"></div><div id="meta"></div><div id="msg"></div></div></div>
+  <div class="row">
+    <button class="a" id="copy">Copy</button>
+    <button class="a" id="upload">Upload</button>
+    <button class="a" id="open">Open</button>
+    <button class="a" id="folder">Folder</button>
+  </div>
+  <div class="bar"><i id="fill"></i></div>
+</div>
+<script src="popup.js"></script></body></html>

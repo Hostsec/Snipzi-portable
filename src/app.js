@@ -10,12 +10,18 @@
   const DEFAULTS = {
     hotkeyRegion: "Ctrl+Shift+1",
     hotkeyScreen: "Ctrl+Shift+2",
+    hotkeyWindow: "Ctrl+Shift+3",
+    hotkeyUpload: "Ctrl+Shift+4",
+    editBeforeSave: false,
+    delaySeconds: 0,
+    keepOverlays: true,
+    popupEnabled: false,
+    popupSeconds: 6,
     saveToFile: true,
     saveDir: "",
     copyToClipboard: true,
     notify: true,
     historyEnabled: true,
-    redactionEnabled: false,
     watermarkEnabled: false,
     watermarkText: "",
     watermarkOpacity: 0.25,
@@ -33,7 +39,10 @@
 
   function getSettings() {
     try {
-      return Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem("snipziSettings") || "{}"));
+      const saved = JSON.parse(localStorage.getItem("snipziSettings") || "{}");
+      // 0.1.x had a "mark areas to hide" switch; the editor now covers that.
+      if (saved.redactionEnabled && saved.editBeforeSave === undefined) saved.editBeforeSave = true;
+      return Object.assign({}, DEFAULTS, saved);
     } catch (e) {
       return Object.assign({}, DEFAULTS);
     }
@@ -94,14 +103,15 @@
     return { w, h, data: new Uint8ClampedArray(buf, 8, w * h * 4) };
   }
 
-  /** Crops the frame, paints redaction boxes (solid, opaque) and returns a PNG data URL. */
-  async function renderCrop(frame, rect, redactions) {
-    const bitmap = await createImageBitmap(new ImageData(frame.data, frame.w, frame.h), rect.x, rect.y, rect.w, rect.h);
+  /** Crops the frame, draws the user's annotations on it and returns a PNG data URL. */
+  async function renderCrop(frame, rect, shapes) {
+    const full = new OffscreenCanvas(frame.w, frame.h);
+    full.getContext("2d").putImageData(new ImageData(frame.data, frame.w, frame.h), 0, 0);
     const canvas = new OffscreenCanvas(rect.w, rect.h);
     const ctx = canvas.getContext("2d");
-    ctx.drawImage(bitmap, 0, 0);
-    ctx.fillStyle = "#000";
-    for (const r of redactions || []) ctx.fillRect(r[0], r[1], r[2], r[3]);
+    ctx.translate(-rect.x, -rect.y);
+    ctx.drawImage(full, 0, 0);
+    if (shapes && shapes.length) window.SnipziAnnotate.drawShapes(ctx, shapes, full);
     return fpsBlobToDataUrl(await canvas.convertToBlob({ type: "image/png" }));
   }
 
@@ -142,7 +152,8 @@
   }
 
   /** Everything after the pixels exist: watermark, format, name, save, clipboard, history. */
-  async function finalizeCapture(rawDataUrl, kind) {
+  async function finalizeCapture(rawDataUrl, kind, opts) {
+    opts = opts || {};
     const s = getSettings();
     let working = rawDataUrl;
 
@@ -214,24 +225,37 @@
     renderLast();
     renderHistory();
 
-    if (s.notify) {
-      const parts = [];
-      if (savedPath) parts.push("Saved " + record.name);
-      if (copied) parts.push("copied to clipboard");
-      notifyNative("Snipzi", parts.length ? parts.join(", ") : "Captured");
+    const wantUpload = !!(s.imgbayUrl && (s.imgbayAuto || opts.upload));
+    const parts = [];
+    if (savedPath) parts.push("Saved " + record.name);
+    if (copied) parts.push("copied to clipboard");
+    const summary = parts.length ? parts.join(", ") : "Captured";
+
+    if (s.popupEnabled) {
+      invoke("show_popup", {
+        payload: {
+          thumb, name: record.name, meta: metaText(record), path: record.path,
+          canUpload: !!s.imgbayUrl && !wantUpload, seconds: s.popupSeconds,
+          msg: wantUpload ? "Uploading..." : summary
+        }
+      }).catch(() => {});
+    } else if (s.notify) {
+      notifyNative("Snipzi", summary);
     }
 
-    if (s.imgbayAuto && s.imgbayUrl) {
-      uploadLast(true).catch(() => {});
+    if (opts.upload && !s.imgbayUrl) {
+      toast("Add your ImgBay address in Settings to upload.");
+      notifyNative("Snipzi", "Saved, but not uploaded: add your ImgBay address in Settings.");
     }
+    if (wantUpload) uploadLast(!opts.upload).catch(() => {});
     return record;
   }
 
   async function handleRegion(p) {
     try {
       const frame = await fetchFrame(p.idx);
-      const raw = await renderCrop(frame, { x: p.x, y: p.y, w: p.w, h: p.h }, p.redactions);
-      await finalizeCapture(raw, "region");
+      const raw = await renderCrop(frame, { x: p.x, y: p.y, w: p.w, h: p.h }, p.shapes);
+      await finalizeCapture(raw, p.kind === "window" ? "window" : "region", { upload: !!p.upload });
     } catch (e) {
       toast("Capture failed: " + msgOf(e));
       notifyNative("Snipzi", "Capture failed: " + msgOf(e));
@@ -240,11 +264,11 @@
     }
   }
 
-  async function handleScreen(idx) {
+  async function handleScreen(p) {
     try {
-      const frame = await fetchFrame(idx);
+      const frame = await fetchFrame(p.idx);
       const raw = await renderCrop(frame, { x: 0, y: 0, w: frame.w, h: frame.h }, []);
-      await finalizeCapture(raw, "screen");
+      await finalizeCapture(raw, "screen", { upload: !!p.upload });
     } catch (e) {
       toast("Capture failed: " + msgOf(e));
       notifyNative("Snipzi", "Capture failed: " + msgOf(e));
@@ -259,6 +283,11 @@
   // -------------------------------------------------------------------------
   // ImgBay upload
   // -------------------------------------------------------------------------
+  function popupFromLast(msg) {
+    const r = readJson("snipziLast", {}) || {};
+    return { thumb: r.thumb, name: r.name, meta: metaText(r), path: r.path, canUpload: false, seconds: getSettings().popupSeconds, msg };
+  }
+
   async function uploadLast(auto) {
     const s = getSettings();
     try {
@@ -280,7 +309,11 @@
       await invoke("copy_text", { text: link }).catch(() => {});
       renderLast();
       if (!auto) toast("Uploaded. Link copied.");
-      if (getSettings().notify) notifyNative("Snipzi", "Uploaded to ImgBay. Link copied.");
+      if (getSettings().popupEnabled) {
+        invoke("show_popup", { payload: popupFromLast("Uploaded. Link copied.") }).catch(() => {});
+      } else if (getSettings().notify || !auto) {
+        notifyNative("Snipzi", "Uploaded to ImgBay. Link copied.");
+      }
       return result;
     } catch (e) {
       const m = msgOf(e);
@@ -410,7 +443,7 @@
   async function applyHotkeys(showError) {
     const s = getSettings();
     try {
-      await invoke("set_hotkeys", { region: s.hotkeyRegion, screen: s.hotkeyScreen });
+      await invoke("set_hotkeys", { keys: { region: s.hotkeyRegion, screen: s.hotkeyScreen, window: s.hotkeyWindow, upload: s.hotkeyUpload } });
       $("hk-error").classList.add("hidden");
       return true;
     } catch (e) {
@@ -422,12 +455,18 @@
     }
   }
 
+  const HOTKEYS = [
+    ["hk-region", "hotkeyRegion", "hk-region-label"],
+    ["hk-window", "hotkeyWindow", "hk-window-label"],
+    ["hk-screen", "hotkeyScreen", "hk-screen-label"],
+    ["hk-upload", "hotkeyUpload", "hk-upload-label"]
+  ];
   function refreshHotkeyLabels() {
     const s = getSettings();
-    $("hk-region").value = s.hotkeyRegion;
-    $("hk-screen").value = s.hotkeyScreen;
-    $("hk-region-label").textContent = s.hotkeyRegion || "no shortcut";
-    $("hk-screen-label").textContent = s.hotkeyScreen || "no shortcut";
+    HOTKEYS.forEach(([input, key, label]) => {
+      $(input).value = s[key];
+      $(label).textContent = s[key] || "no shortcut";
+    });
   }
 
   function wireHotkeyInput(id, key) {
@@ -463,16 +502,68 @@
   // -------------------------------------------------------------------------
   // Settings form
   // -------------------------------------------------------------------------
-  const CHECKS = ["saveToFile", "copyToClipboard", "notify", "redactionEnabled", "watermarkEnabled", "imgbayAuto"];
+  const CHECKS = ["saveToFile", "copyToClipboard", "notify", "popupEnabled", "editBeforeSave", "keepOverlays", "watermarkEnabled", "imgbayAuto"];
   const TEXTS = ["saveDir", "watermarkText", "filenameTemplate", "folderTemplate", "imgbayUrl"];
   const SELECTS = ["watermarkStyle", "format", "imgbayExpiry", "imgbayVisibility"];
-  const RANGES = ["watermarkOpacity", "quality"];
+  const RANGES = ["watermarkOpacity", "quality", "popupSeconds"];
+
+  function pushOptions() {
+    const s = getSettings();
+    invoke("set_options", {
+      options: { edit_before_save: !!s.editBeforeSave, delay_secs: Number(s.delaySeconds) || 0, keep_overlays: !!s.keepOverlays }
+    }).catch(() => {});
+  }
+
+  function initDelay() {
+    const apply = () => {
+      const d = Number(getSettings().delaySeconds) || 0;
+      document.querySelectorAll("[data-delay]").forEach((b) => b.classList.toggle("on", Number(b.dataset.delay) === d));
+      $("c-edit").checked = !!getSettings().editBeforeSave;
+      $("s-editBeforeSave").checked = !!getSettings().editBeforeSave;
+    };
+    document.querySelectorAll("[data-delay]").forEach((b) =>
+      b.addEventListener("click", () => {
+        setSettings({ delaySeconds: Number(b.dataset.delay) });
+        apply();
+        pushOptions();
+      })
+    );
+    $("c-edit").addEventListener("change", (e) => {
+      setSettings({ editBeforeSave: e.target.checked });
+      apply();
+      pushOptions();
+    });
+    $("s-editBeforeSave").addEventListener("change", apply);
+    apply();
+  }
+
+  function exampleName() {
+    const s = getSettings();
+    const t = tokensNow();
+    const ext = fpsExtensionForFormat(s.format);
+    const folder = buildFolder(s.folderTemplate || "", t, "region");
+    const name = fpsBuildFilename(s.filenameTemplate, "region", t, ext);
+    return (folder ? folder + "/" : "") + name;
+  }
+
+  function initTokens() {
+    document.querySelectorAll("[data-token]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const input = $(b.dataset.target);
+        input.value += b.dataset.token;
+        input.dispatchEvent(new Event("input"));
+      })
+    );
+  }
 
   function syncDependentUi() {
     const s = getSettings();
+    $("example-name").textContent = exampleName();
+    $("popup-opts").style.opacity = s.popupEnabled ? "1" : "0.5";
     $("wm-opts").style.opacity = s.watermarkEnabled ? "1" : "0.5";
     $("q-row").classList.toggle("hidden", s.format === "png");
     $("wm-op-val").textContent = Math.round(s.watermarkOpacity * 100) + "%";
+    $("popup-val").textContent = s.popupSeconds + " s";
     $("q-val").textContent = Math.round(s.quality * 100) + "%";
     $("last-upload").classList.toggle("hidden", !s.imgbayUrl || !readJson("snipziLast", null));
   }
@@ -483,11 +574,11 @@
       $("s-" + k).checked = !!s[k];
       $("s-" + k).addEventListener("change", (e) => {
         setSettings({ [k]: e.target.checked });
-        if (k === "redactionEnabled") invoke("set_redaction", { enabled: e.target.checked }).catch(() => {});
+        if (k === "editBeforeSave" || k === "keepOverlays") pushOptions();
         syncDependentUi();
       });
     });
-    invoke("set_redaction", { enabled: !!s.redactionEnabled }).catch(() => {});
+    pushOptions();
     TEXTS.forEach((k) => {
       $("s-" + k).value = s[k] || "";
       $("s-" + k).addEventListener("input", (e) => {
@@ -521,8 +612,30 @@
         e.target.checked = !e.target.checked;
       });
     });
-    wireHotkeyInput("hk-region", "hotkeyRegion");
-    wireHotkeyInput("hk-screen", "hotkeyScreen");
+    HOTKEYS.forEach(([input, key]) => wireHotkeyInput(input, key));
+    document.querySelectorAll("[data-reset-hotkeys]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        setSettings({ hotkeyRegion: DEFAULTS.hotkeyRegion, hotkeyScreen: DEFAULTS.hotkeyScreen, hotkeyWindow: DEFAULTS.hotkeyWindow, hotkeyUpload: DEFAULTS.hotkeyUpload });
+        refreshHotkeyLabels();
+        await applyHotkeys(true);
+      })
+    );
+    initDelay();
+    initTokens();
+    $("browse-dir").addEventListener("click", async () => {
+      const d = await invoke("pick_folder", { start: getSettings().saveDir || null }).catch(() => null);
+      if (d) {
+        setSettings({ saveDir: d });
+        $("s-saveDir").value = d;
+      }
+    });
+    $("open-dir").addEventListener("click", () =>
+      invoke("open_save_folder", { dir: getSettings().saveDir || "" }).catch((e) => toast(msgOf(e)))
+    );
+    $("reset-dir").addEventListener("click", () => {
+      setSettings({ saveDir: "" });
+      $("s-saveDir").value = "";
+    });
     refreshHotkeyLabels();
     syncDependentUi();
   }
@@ -539,7 +652,9 @@
   function init() {
     document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
     $("btn-region").addEventListener("click", () => invoke("start_capture", { mode: "region" }));
+    $("btn-window").addEventListener("click", () => invoke("start_capture", { mode: "window" }));
     $("btn-screen").addEventListener("click", () => invoke("start_capture", { mode: "screen" }));
+    $("btn-upload").addEventListener("click", () => invoke("start_capture", { mode: "upload" }));
 
     $("last-open").addEventListener("click", () => {
       const r = readJson("snipziLast", null);
@@ -614,7 +729,14 @@
     renderHistory();
 
     listen("capture:region", (e) => handleRegion(e.payload));
-    listen("capture:screen", (e) => handleScreen(e.payload));
+    listen("capture:screen", (e) => handleScreen(e.payload || {}));
+    listen("popup:action", (e) => {
+      const a = e.payload;
+      if (a === "copy") $("last-copy").click();
+      else if (a === "upload") $("last-upload").click();
+      else if (a === "open") $("last-open").click();
+      else if (a === "folder") $("last-folder").click();
+    });
 
     // Re-register the user's own shortcuts (Rust starts with the defaults).
     applyHotkeys(true);
