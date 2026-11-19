@@ -565,34 +565,10 @@
       uploadLast(false).catch(() => {}).finally(() => ($("last-upload").disabled = false));
     });
 
-    let deleteArmed = false;
-    $("last-delete").addEventListener("click", async (e) => {
-      const btn = e.currentTarget;
-      if (!deleteArmed) {
-        deleteArmed = true;
-        btn.textContent = "Sure?";
-        setTimeout(() => {
-          deleteArmed = false;
-          btn.textContent = "Delete";
-        }, 3000);
-        return;
-      }
-      deleteArmed = false;
-      btn.textContent = "Delete";
-      const r = readJson("snipziLast", null);
-      if (!r) return;
-      try {
-        if (r.path) await invoke("delete_file", { path: r.path });
-      } catch (err) {
-        toast("Could not delete the file: " + msgOf(err));
-        return;
-      }
+    // Only clears the "Last screenshot" panel. The file and the History entry stay untouched.
+    $("last-dismiss").addEventListener("click", () => {
       localStorage.removeItem("snipziLast");
-      localStorage.setItem("snipziHistory", JSON.stringify(readJson("snipziHistory", []).filter((h) => h.ts !== r.ts)));
-      fpsIdbPut("last", null).catch(() => {});
       renderLast();
-      renderHistory();
-      toast(r.path ? "Moved to the Recycle Bin" : "Removed");
     });
 
     $("hist-toggle").addEventListener("click", () => {

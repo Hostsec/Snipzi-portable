@@ -133,19 +133,15 @@ with sync_playwright() as p:
     check("save off: nothing written", len(pg.evaluate("window.__saved")) == saved_n)
     check("save off: Open button disabled", pg.evaluate("document.getElementById('last-open').disabled") is True)
 
-    # 5b. delete last screenshot (two clicks, file goes to the Recycle Bin)
+    # 5b. dismiss the last-screenshot panel: no file is touched, history entry stays
     pg.evaluate("window.__snipzi.setSettings({saveToFile:true, historyEnabled:true})")
     pg.evaluate("window.__snipzi.handleScreen(0)")
-    lastp = pg.evaluate("JSON.parse(localStorage.getItem('snipziLast')).path")
     hist_n = pg.evaluate("JSON.parse(localStorage.getItem('snipziHistory')).length")
     pg.evaluate("window.__calls.length = 0")
-    pg.evaluate("document.getElementById('last-delete').click()")
-    check("delete: first click only asks", not any(c["cmd"] == "delete_file" for c in pg.evaluate("window.__calls")))
-    pg.evaluate("document.getElementById('last-delete').click()"); pg.wait_for_timeout(200)
-    dc = [c for c in pg.evaluate("window.__calls") if c["cmd"] == "delete_file"]
-    check("delete: second click deletes that file", len(dc) == 1 and dc[0]["args"]["path"] == lastp, str(dc))
-    check("delete: last record cleared and card hidden", pg.evaluate("localStorage.getItem('snipziLast')") is None and pg.evaluate("document.getElementById('last-card').classList.contains('hidden')"))
-    check("delete: removed from history too", pg.evaluate("JSON.parse(localStorage.getItem('snipziHistory')).length") == hist_n - 1)
+    pg.evaluate("document.getElementById('last-dismiss').click()"); pg.wait_for_timeout(100)
+    check("dismiss: panel hidden and record cleared", pg.evaluate("localStorage.getItem('snipziLast')") is None and pg.evaluate("document.getElementById('last-card').classList.contains('hidden')"))
+    check("dismiss: no native calls (file untouched)", pg.evaluate("window.__calls.length") == 0)
+    check("dismiss: history entry kept", pg.evaluate("JSON.parse(localStorage.getItem('snipziHistory')).length") == hist_n)
 
     # 6. hotkey capture box
     pg.evaluate("window.__calls.length = 0")
