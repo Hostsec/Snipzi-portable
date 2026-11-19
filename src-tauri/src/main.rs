@@ -67,37 +67,23 @@ fn grab_all() -> Result<Vec<Frame>, String> {
     // Stable order so overlay N always matches frame N.
     monitors.sort_by_key(|m| (m.x().unwrap_or(0), m.y().unwrap_or(0)));
 
-    let results: Vec<Result<Frame, String>> = std::thread::scope(|s| {
-        let handles: Vec<_> = monitors
-            .iter()
-            .map(|m| {
-                s.spawn(move || -> Result<Frame, String> {
-                    let img = m.capture_image().map_err(|e| e.to_string())?;
-                    let (w, h) = (img.width(), img.height());
-                    let mut rgba = img.into_raw();
-                    // Some capture paths leave alpha at 0; a screenshot is always opaque.
-                    for px in rgba.chunks_exact_mut(4) {
-                        px[3] = 255;
-                    }
-                    Ok(Frame {
-                        x: m.x().map_err(|e| e.to_string())?,
-                        y: m.y().map_err(|e| e.to_string())?,
-                        w,
-                        h,
-                        rgba,
-                    })
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|_| Err("capture thread panicked".into())))
-            .collect()
-    });
-
+    // One after another: xcap's Monitor handle cannot be shared across threads on Windows.
     let mut frames = Vec::new();
-    for r in results {
-        frames.push(r?);
+    for m in &monitors {
+        let img = m.capture_image().map_err(|e| e.to_string())?;
+        let (w, h) = (img.width(), img.height());
+        let mut rgba = img.into_raw();
+        // Some capture paths leave alpha at 0; a screenshot is always opaque.
+        for px in rgba.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+        frames.push(Frame {
+            x: m.x().map_err(|e| e.to_string())?,
+            y: m.y().map_err(|e| e.to_string())?,
+            w,
+            h,
+            rgba,
+        });
     }
     if frames.is_empty() {
         return Err("No screen found to capture.".into());
