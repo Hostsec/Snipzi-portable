@@ -413,6 +413,8 @@
     const box = $("color-list");
     box.innerHTML = "";
     list.forEach((c) => {
+      const wrap = document.createElement("span");
+      wrap.className = "swatch-wrap";
       const b = document.createElement("button");
       b.className = "swatch";
       b.style.background = c.hex;
@@ -420,7 +422,17 @@
       b.addEventListener("click", () =>
         invoke("copy_text", { text: formatColor(c, getSettings().colorFormat) }).then(() => toast("Copied " + formatColor(c, getSettings().colorFormat)))
       );
-      box.appendChild(b);
+      const x = document.createElement("button");
+      x.className = "swatch-x";
+      x.textContent = "\u00d7";
+      x.title = "Remove this colour";
+      x.addEventListener("click", () => {
+        localStorage.setItem("snipziColors", JSON.stringify(readJson("snipziColors", []).filter((k) => k.hex !== c.hex)));
+        renderColors();
+      });
+      wrap.appendChild(b);
+      wrap.appendChild(x);
+      box.appendChild(wrap);
     });
   }
 
@@ -827,6 +839,10 @@
     $("btn-picker").addEventListener("click", () => invoke("start_capture", { mode: "picker" }));
     $("btn-ruler").addEventListener("click", () => invoke("start_capture", { mode: "ruler" }));
 
+    $("colors-clear").addEventListener("click", () => {
+      localStorage.setItem("snipziColors", "[]");
+      renderColors();
+    });
     $("last-edit").addEventListener("click", () => editRecord(readJson("snipziLast", null)));
     $("last-open").addEventListener("click", () => {
       const r = readJson("snipziLast", null);

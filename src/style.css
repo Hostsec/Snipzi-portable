@@ -95,3 +95,8 @@ button.primary small { color: rgba(255, 255, 255, 0.85); }
 .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
 .swatch { width: 34px; height: 34px; padding: 0; border-radius: 8px; border: 2px solid var(--line); }
 .swatch:hover { transform: scale(1.1); }
+.card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.card-head h3 { margin: 0; }
+.swatch-wrap { position: relative; }
+.swatch-x { position: absolute; right: -6px; top: -6px; width: 18px; height: 18px; padding: 0; border-radius: 50%; font-size: 11px; line-height: 18px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); display: none; }
+.swatch-wrap:hover .swatch-x { display: block; }
