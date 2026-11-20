@@ -8,6 +8,7 @@
   // Settings
   // -------------------------------------------------------------------------
   const DEFAULTS = {
+    theme: "default",
     hotkeyRegion: "Ctrl+Shift+1",
     hotkeyScreen: "Ctrl+Shift+2",
     hotkeyWindow: "Ctrl+Shift+3",
@@ -568,8 +569,21 @@
     $("last-upload").classList.toggle("hidden", !s.imgbayUrl || !readJson("snipziLast", null));
   }
 
+  function applyTheme() {
+    const t = getSettings().theme;
+    document.documentElement.dataset.theme = t;
+    document.querySelectorAll("[data-theme-pick]").forEach((b) => b.classList.toggle("on", b.dataset.themePick === t));
+  }
+
   function initSettingsForm() {
     const s = getSettings();
+    document.querySelectorAll("[data-theme-pick]").forEach((b) =>
+      b.addEventListener("click", () => {
+        setSettings({ theme: b.dataset.themePick });
+        applyTheme();
+      })
+    );
+    applyTheme();
     CHECKS.forEach((k) => {
       $("s-" + k).checked = !!s[k];
       $("s-" + k).addEventListener("change", (e) => {

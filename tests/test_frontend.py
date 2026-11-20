@@ -344,6 +344,13 @@ with sync_playwright() as p:
     m.click("[data-reset-hotkeys]"); m.wait_for_timeout(150)
     hk = [c for c in m.evaluate("window.__calls") if c["cmd"] == "set_hotkeys"]
     check("reset shortcuts re-registers defaults", hk and hk[-1]["args"]["keys"] == {"region": "Ctrl+Shift+1", "screen": "Ctrl+Shift+2", "window": "Ctrl+Shift+3", "upload": "Ctrl+Shift+4"}, str(hk))
+    m.click("[data-theme-pick=green]")
+    check("theme: click applies green at once and persists", m.evaluate("document.documentElement.dataset.theme") == "green" and m.evaluate("window.__snipzi.getSettings().theme") == "green")
+    bg = m.evaluate("getComputedStyle(document.body).backgroundColor")
+    m.click("[data-theme-pick=dark]")
+    check("theme: dark changes colours", m.evaluate("getComputedStyle(document.body).backgroundColor") != bg and m.evaluate("getComputedStyle(document.body).backgroundColor") == "rgb(18, 18, 20)")
+    m.reload(); m.wait_for_function("window.__snipzi !== undefined")
+    check("theme: remembered after reload", m.evaluate("document.documentElement.dataset.theme") == "dark")
     check("main page (new handlers): no JS errors", not merr, str(merr))
     m.close()
 

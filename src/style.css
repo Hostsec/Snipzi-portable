@@ -3,7 +3,7 @@
   --accent: #6c4ae6; --accent2: #ff5d7a; --err: #c62843; --btn: #ececf3; --btn-fg: #1d1d28;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #16161d; --fg: #ececf3; --muted: #9a9aad; --card: #1f1f29; --line: #2f2f3d; --btn: #2a2a38; --btn-fg: #ececf3; --err: #ff7c92; }
+  :root[data-theme="default"] { --bg: #16161d; --fg: #ececf3; --muted: #9a9aad; --card: #1f1f29; --line: #2f2f3d; --btn: #2a2a38; --btn-fg: #ececf3; --err: #ff7c92; }
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px "Segoe UI", system-ui, sans-serif; }
@@ -63,3 +63,18 @@ button.primary small { color: rgba(255, 255, 255, 0.85); }
 .row.check input { margin-top: 3px; }
 .chips { display: flex; gap: 6px; margin: 0 0 6px; justify-content: flex-end; }
 .chipbtn { padding: 2px 9px; border-radius: 10px; font-size: 12px; }
+
+/* Colour schemes (chosen in Settings, applied through data-theme on <html>) */
+:root[data-theme="green"] { --bg: #f1f7f1; --fg: #1f2e24; --muted: #5a7060; --card: #e0eee2; --line: #cbdecf; --accent: #3f8f5b; --accent2: #7bbf86; --btn: #d0e4d4; --btn-fg: #1f2e24; --err: #b5382f; }
+:root[data-theme="grey"] { --bg: #dadde1; --fg: #20242a; --muted: #565d66; --card: #c7cbd1; --line: #b2b7be; --accent: #56616f; --accent2: #8b95a2; --btn: #bac0c7; --btn-fg: #20242a; --err: #a3283d; }
+:root[data-theme="grey"] body { background: linear-gradient(160deg, #e6e9ed, #cbd0d6); }
+:root[data-theme="grey"] header { background: linear-gradient(180deg, #eceff2, #d3d7dc); }
+:root[data-theme="dark"] { --bg: #121214; --fg: #e8e8ec; --muted: #9a9aa4; --card: #1c1c20; --line: #2c2c32; --accent: #7c6cf0; --accent2: #e0587a; --btn: #2a2a30; --btn-fg: #e8e8ec; --err: #ff7c92; }
+.themes { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+.theme { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 10px; border: 2px solid transparent; background: var(--card); min-width: 78px; }
+.theme.on { border-color: var(--accent); font-weight: 600; }
+.theme i { width: 44px; height: 26px; border-radius: 6px; border: 1px solid var(--line); display: block; }
+.theme[data-theme-pick="default"] i { background: linear-gradient(135deg, #ff5d7a, #6c4ae6); }
+.theme[data-theme-pick="green"] i { background: linear-gradient(135deg, #cfe8d3, #7bbf86 50%, #3f8f5b); }
+.theme[data-theme-pick="grey"] i { background: linear-gradient(135deg, #e6e9ed, #9aa3ad 50%, #56616f); }
+.theme[data-theme-pick="dark"] i { background: linear-gradient(135deg, #2a2a30, #121214); }
