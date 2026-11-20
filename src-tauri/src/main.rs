@@ -10,6 +10,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -28,10 +29,61 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
+mod stitch;
+
+/// Mouse wheel and cursor control, used by scrolling capture. Windows only.
+#[cfg(windows)]
+mod winput {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_WHEEL, MOUSEINPUT,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
+
+    pub fn cursor() -> (i32, i32) {
+        let mut p = POINT { x: 0, y: 0 };
+        unsafe {
+            GetCursorPos(&mut p);
+        }
+        (p.x, p.y)
+    }
+    pub fn move_cursor(x: i32, y: i32) {
+        unsafe {
+            SetCursorPos(x, y);
+        }
+    }
+    /// One wheel event. Negative = scroll down.
+    pub fn wheel(delta: i32) -> bool {
+        let input = INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT { dx: 0, dy: 0, mouseData: delta as u32, dwFlags: MOUSEEVENTF_WHEEL, time: 0, dwExtraInfo: 0 },
+            },
+        };
+        unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) == 1 }
+    }
+}
+
+#[cfg(not(windows))]
+mod winput {
+    pub fn cursor() -> (i32, i32) {
+        (0, 0)
+    }
+    pub fn move_cursor(_x: i32, _y: i32) {}
+    pub fn wheel(_delta: i32) -> bool {
+        false
+    }
+}
+
 const DEFAULT_REGION_KEY: &str = "Ctrl+Shift+1";
 const DEFAULT_SCREEN_KEY: &str = "Ctrl+Shift+2";
 const DEFAULT_WINDOW_KEY: &str = "Ctrl+Shift+3";
 const DEFAULT_UPLOAD_KEY: &str = "Ctrl+Shift+4";
+const DEFAULT_SCROLL_KEY: &str = "Ctrl+Shift+5";
+const DEFAULT_PICKER_KEY: &str = "Ctrl+Shift+6";
+const DEFAULT_RULER_KEY: &str = "Ctrl+Shift+7";
+/// Longest scrolling capture, in pixels (width x height). About 20,000 px tall at full HD width.
+const SCROLL_MAX_PIXELS: usize = 40_000_000;
 
 struct Frame {
     x: i32,
@@ -61,11 +113,13 @@ struct Capture {
     focus_idx: usize,
     /// Bumped per capture so stale timeouts do not act on a newer capture.
     generation: u64,
-    /// "region", "window" or "screen".
+    /// "region", "window", "screen", "scroll", "picker" or "ruler".
     mode: String,
     /// Upload to ImgBay once saved (the "capture and upload" shortcut).
     upload: bool,
     countdown: u32,
+    /// Height of the scrolling capture gathered so far.
+    scroll_px: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -88,6 +142,8 @@ struct AppState {
     /// Overlay windows whose page has loaded and is listening for frames.
     loaded: Mutex<HashSet<usize>>,
     popup: Mutex<Option<Value>>,
+    /// Set by the Esc key while a scrolling capture runs.
+    stop_scroll: AtomicBool,
 }
 
 fn overlay_label(i: usize) -> String {
@@ -524,6 +580,10 @@ fn finish_region(app: AppHandle, result: RegionResult) {
         let cap = state.cap.lock().unwrap();
         (cap.mode.clone(), cap.upload || result.upload)
     };
+    if kind == "scroll" {
+        start_scroll(&app, result, upload);
+        return;
+    }
     let payload = json!({
         "idx": result.idx, "x": result.x, "y": result.y, "w": result.w, "h": result.h,
         "shapes": result.shapes, "kind": kind, "upload": upload,
@@ -535,6 +595,249 @@ fn finish_region(app: AppHandle, result: RegionResult) {
 #[tauri::command]
 fn cancel_capture(app: AppHandle) {
     finish_session(&app, true);
+}
+
+#[derive(Deserialize)]
+struct PickResult {
+    r: u8,
+    g: u8,
+    b: u8,
+    x: u32,
+    y: u32,
+}
+
+/// The colour picker finished: hand the colour to the main window.
+#[tauri::command]
+fn finish_pick(app: AppHandle, result: PickResult) {
+    let _ = app.emit_to("main", "capture:color", json!({ "r": result.r, "g": result.g, "b": result.b, "x": result.x, "y": result.y }));
+    finish_session(&app, true);
+}
+
+// ---------------------------------------------------------------------------
+// Scrolling capture: scroll the chosen area with the mouse wheel, grab it after every
+// step and stitch the views together (see stitch.rs for how).
+// ---------------------------------------------------------------------------
+
+struct WinIo {
+    monitor: xcap::Monitor,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    cx: i32,
+    cy: i32,
+    app: AppHandle,
+}
+
+impl WinIo {
+    fn capture(&self) -> Result<stitch::Img, String> {
+        let img = self.monitor.capture_region(self.x, self.y, self.w, self.h).map_err(|e| e.to_string())?;
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let mut rgba = img.into_raw();
+        for px in rgba.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+        Ok(stitch::Img::new(w, h, rgba))
+    }
+}
+
+impl stitch::ScrollIo for WinIo {
+    /// A view that has stopped moving (smooth scrolling takes a moment to settle).
+    fn grab(&mut self) -> Result<stitch::Img, String> {
+        std::thread::sleep(Duration::from_millis(140));
+        let mut last = self.capture()?;
+        for _ in 0..16 {
+            std::thread::sleep(Duration::from_millis(70));
+            let cur = self.capture()?;
+            if cur.rgba == last.rgba {
+                return Ok(cur);
+            }
+            last = cur;
+        }
+        Ok(last)
+    }
+    fn wheel(&mut self, notches: i32) {
+        // keep the pointer over the area even if the user nudged the mouse
+        winput::move_cursor(self.cx, self.cy);
+        winput::wheel(-notches * 120);
+    }
+    fn stopped(&self) -> bool {
+        self.app.state::<AppState>().stop_scroll.load(Ordering::SeqCst)
+    }
+    fn progress(&mut self, height: usize) {
+        self.app.state::<AppState>().cap.lock().unwrap().scroll_px = height;
+    }
+}
+
+#[tauri::command]
+fn get_scroll_status(state: tauri::State<AppState>) -> usize {
+    state.cap.lock().unwrap().scroll_px
+}
+
+/// A small "Scrolling..." card, placed where it does not cover the captured area.
+fn show_scroll_status(app: &AppHandle, region: (i32, i32, u32, u32)) -> Option<WebviewWindow> {
+    let m = cursor_monitor(app)?;
+    let s = m.scale_factor();
+    let (pw, ph) = ((300.0 * s) as i32, (64.0 * s) as i32);
+    let (mp, ms) = (m.position(), m.size());
+    let (mx0, my0, mx1, my1) = (mp.x, mp.y, mp.x + ms.width as i32, mp.y + ms.height as i32);
+    let (rx, ry, rw, rh) = (region.0, region.1, region.2 as i32, region.3 as i32);
+    let gap = 10;
+    let cx = (rx + rw / 2 - pw / 2).clamp(mx0, (mx1 - pw).max(mx0));
+    let cy = (ry + rh / 2 - ph / 2).clamp(my0, (my1 - ph).max(my0));
+    let spots = [(cx, ry + rh + gap), (cx, ry - ph - gap), (rx + rw + gap, cy), (rx - pw - gap, cy)];
+    let (x, y) = spots.into_iter().find(|(x, y)| *x >= mx0 && *y >= my0 && *x + pw <= mx1 && *y + ph <= my1)?;
+    let win = helper_window(app, "scrollstat", "scrollstat.html", 300.0, 64.0).ok()?;
+    let _ = win.set_size(PhysicalSize::new(pw as u32, ph as u32));
+    let _ = win.set_position(PhysicalPosition::new(x, y));
+    let _ = win.show();
+    Some(win)
+}
+
+fn start_scroll(app: &AppHandle, r: RegionResult, upload: bool) {
+    hide_overlays(app);
+    let app = app.clone();
+    std::thread::spawn(move || match do_scroll(&app, &r) {
+        Ok((frame, note)) => {
+            let (w, h) = (frame.w, frame.h);
+            app.state::<AppState>().cap.lock().unwrap().frames = vec![frame];
+            let _ = app.emit_to(
+                "main",
+                "capture:region",
+                json!({ "idx": 0, "x": 0, "y": 0, "w": w, "h": h, "shapes": [], "kind": "scroll", "upload": upload, "note": note }),
+            );
+            finish_session(&app, false);
+        }
+        Err(e) => {
+            finish_session(&app, true);
+            notify(&app, "Snipzi", &e);
+            let _ = app.emit_to("main", "capture:failed", e);
+        }
+    });
+}
+
+fn do_scroll(app: &AppHandle, r: &RegionResult) -> Result<(Frame, Option<String>), String> {
+    if !cfg!(windows) {
+        return Err("Scrolling capture is only available on Windows.".into());
+    }
+    // Let the capture overlay disappear before the first grab.
+    std::thread::sleep(Duration::from_millis(280));
+
+    let mut monitors = xcap::Monitor::all().map_err(|e| e.to_string())?;
+    monitors.sort_by_key(|m| (m.x().unwrap_or(0), m.y().unwrap_or(0)));
+    if r.idx >= monitors.len() {
+        return Err("The screen changed while capturing. Please try again.".into());
+    }
+    let monitor = monitors.swap_remove(r.idx);
+    let (mx, my) = (monitor.x().map_err(|e| e.to_string())?, monitor.y().map_err(|e| e.to_string())?);
+    let (mw, mh) = (monitor.width().map_err(|e| e.to_string())?, monitor.height().map_err(|e| e.to_string())?);
+    let x = r.x.min(mw.saturating_sub(1));
+    let y = r.y.min(mh.saturating_sub(1));
+    let w = r.w.min(mw - x);
+    let h = r.h.min(mh - y);
+    if w < 40 || h < 100 {
+        return Err("That area is too small for a scrolling capture. Select a taller area.".into());
+    }
+    let (cx, cy) = (mx + x as i32 + w as i32 / 2, my + y as i32 + h as i32 / 2);
+
+    let state = app.state::<AppState>();
+    state.stop_scroll.store(false, Ordering::SeqCst);
+    state.cap.lock().unwrap().scroll_px = h as usize;
+
+    let before = winput::cursor();
+    winput::move_cursor(cx, cy);
+    let status = show_scroll_status(app, (mx + x as i32, my + y as i32, w, h));
+
+    // Esc stops early and keeps what has been captured.
+    let gs = app.global_shortcut();
+    let stop_app = app.clone();
+    let esc_ok = gs
+        .on_shortcut("Escape", move |_a, _s, ev| {
+            if ev.state == ShortcutState::Pressed {
+                stop_app.state::<AppState>().stop_scroll.store(true, Ordering::SeqCst);
+            }
+        })
+        .is_ok();
+
+    let mut io = WinIo { monitor, x, y, w, h, cx, cy, app: app.clone() };
+    let result = stitch::run(&mut io, SCROLL_MAX_PIXELS);
+
+    if esc_ok {
+        let _ = gs.unregister("Escape");
+    }
+    if let Some(win) = status {
+        let _ = win.destroy();
+    }
+    winput::move_cursor(before.0, before.1);
+
+    let (img, why) = result?;
+    let one_view = img.h <= h as usize;
+    let note = match why {
+        stitch::Stop::EndReached => None,
+        stitch::Stop::UserStopped => Some("Stopped. Kept everything captured so far.".to_string()),
+        stitch::Stop::SizeLimit => Some("Reached the maximum size (about 40 megapixels). The picture ends there.".to_string()),
+        stitch::Stop::NoScroll => {
+            return Err("Nothing scrolled. Select the part of the page that scrolls with the mouse wheel, and start with the pointer over it.".into());
+        }
+        stitch::Stop::LostTrack => {
+            if one_view {
+                return Err("Could not follow the scrolling. Select only the part that scrolls (without fixed side bars) and try again.".into());
+            }
+            Some("Stopped early because Snipzi lost track of the scrolling (moving or animated content?). Kept what was captured.".to_string())
+        }
+    };
+    Ok((Frame { x: mx, y: my, w: img.w as u32, h: img.h as u32, rgba: img.rgba }, note))
+}
+
+// ---------------------------------------------------------------------------
+// Editor window (reopen a saved capture and annotate it)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn open_editor(app: AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("editor") {
+        let _ = app.emit_to("editor", "editor:load", ());
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, "editor", WebviewUrl::App("overlay.html?editor=1".into()))
+        .title("Snipzi editor")
+        .inner_size(1100.0, 760.0)
+        .min_inner_size(640.0, 420.0)
+        .center()
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The editor finished: tell the main window what to save, then close the editor.
+#[tauri::command]
+fn editor_done(app: AppHandle, result: Value) {
+    let _ = app.emit_to("main", "editor:done", result);
+    if let Some(w) = app.get_webview_window("editor") {
+        let _ = w.destroy();
+    }
+}
+
+#[tauri::command]
+fn close_editor(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("editor") {
+        let _ = w.destroy();
+    }
+}
+
+/// Reads an image file from disk for the editor (old History entries have no stored copy).
+#[tauri::command]
+fn read_image_file(path: String) -> Result<Response, String> {
+    let lower = path.to_lowercase();
+    if !(lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg") || lower.ends_with(".webp")) {
+        return Err("Only PNG, JPEG and WebP files can be edited.".into());
+    }
+    let bytes = std::fs::read(&path).map_err(|e| format!("Could not read the file: {e}"))?;
+    Ok(Response::new(bytes))
 }
 
 // ---------------------------------------------------------------------------
@@ -777,21 +1080,44 @@ struct HotkeyArgs {
     screen: String,
     window: String,
     upload: String,
+    #[serde(default)]
+    scroll: String,
+    #[serde(default)]
+    picker: String,
+    #[serde(default)]
+    ruler: String,
+}
+
+impl HotkeyArgs {
+    fn defaults() -> HotkeyArgs {
+        HotkeyArgs {
+            region: DEFAULT_REGION_KEY.into(),
+            screen: DEFAULT_SCREEN_KEY.into(),
+            window: DEFAULT_WINDOW_KEY.into(),
+            upload: DEFAULT_UPLOAD_KEY.into(),
+            scroll: DEFAULT_SCROLL_KEY.into(),
+            picker: DEFAULT_PICKER_KEY.into(),
+            ruler: DEFAULT_RULER_KEY.into(),
+        }
+    }
 }
 
 #[tauri::command]
 fn set_hotkeys(app: AppHandle, keys: HotkeyArgs) -> Result<(), String> {
-    register_hotkeys(&app, &keys.region, &keys.screen, &keys.window, &keys.upload)
+    register_hotkeys(&app, &keys)
 }
 
-fn register_hotkeys(app: &AppHandle, region: &str, screen: &str, window: &str, upload: &str) -> Result<(), String> {
+fn register_hotkeys(app: &AppHandle, keys: &HotkeyArgs) -> Result<(), String> {
     let gs = app.global_shortcut();
     gs.unregister_all().map_err(|e| e.to_string())?;
-    let jobs: [(&str, &str, &str, bool); 4] = [
-        (region, "region", "region capture", false),
-        (screen, "screen", "screen capture", false),
-        (window, "window", "window capture", false),
-        (upload, "region", "capture and upload", true),
+    let jobs: [(&str, &str, &str, bool); 7] = [
+        (&keys.region, "region", "region capture", false),
+        (&keys.screen, "screen", "screen capture", false),
+        (&keys.window, "window", "window capture", false),
+        (&keys.upload, "region", "capture and upload", true),
+        (&keys.scroll, "scroll", "scrolling capture", false),
+        (&keys.picker, "picker", "colour picker", false),
+        (&keys.ruler, "ruler", "ruler", false),
     ];
     for (key, mode, label, up) in jobs {
         if key.trim().is_empty() {
@@ -934,7 +1260,13 @@ fn main() {
             overlay_loaded,
             overlay_ready,
             finish_region,
+            finish_pick,
             cancel_capture,
+            get_scroll_status,
+            open_editor,
+            editor_done,
+            close_editor,
+            read_image_file,
             start_capture,
             get_default_save_dir,
             save_file,
@@ -974,9 +1306,12 @@ fn main() {
             let m_region = MenuItem::with_id(app, "region", "Capture region", true, None::<&str>)?;
             let m_window = MenuItem::with_id(app, "window", "Capture window", true, None::<&str>)?;
             let m_screen = MenuItem::with_id(app, "screen", "Capture screen", true, None::<&str>)?;
+            let m_scroll = MenuItem::with_id(app, "scroll", "Scrolling capture", true, None::<&str>)?;
+            let m_picker = MenuItem::with_id(app, "picker", "Colour picker", true, None::<&str>)?;
+            let m_ruler = MenuItem::with_id(app, "ruler", "Ruler", true, None::<&str>)?;
             let m_open = MenuItem::with_id(app, "open", "Open Snipzi", true, None::<&str>)?;
             let m_quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&m_region, &m_window, &m_screen, &m_open, &m_quit])?;
+            let menu = Menu::with_items(app, &[&m_region, &m_window, &m_screen, &m_scroll, &m_picker, &m_ruler, &m_open, &m_quit])?;
             let mut tray = TrayIconBuilder::new()
                 .tooltip("Snipzi")
                 .menu(&menu)
@@ -985,6 +1320,9 @@ fn main() {
                     "region" => begin_capture(app, "region", 150, false),
                     "window" => begin_capture(app, "window", 150, false),
                     "screen" => begin_capture(app, "screen", 150, false),
+                    "scroll" => begin_capture(app, "scroll", 150, false),
+                    "picker" => begin_capture(app, "picker", 150, false),
+                    "ruler" => begin_capture(app, "ruler", 150, false),
                     "open" => show_main(app),
                     "quit" => app.exit(0),
                     _ => {}
@@ -1000,7 +1338,7 @@ fn main() {
             tray.build(app)?;
 
             // Default hotkeys right away; the frontend re-registers the user's own on load.
-            if let Err(e) = register_hotkeys(&handle, DEFAULT_REGION_KEY, DEFAULT_SCREEN_KEY, DEFAULT_WINDOW_KEY, DEFAULT_UPLOAD_KEY) {
+            if let Err(e) = register_hotkeys(&handle, &HotkeyArgs::defaults()) {
                 eprintln!("hotkeys: {e}");
             }
 

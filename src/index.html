@@ -21,10 +21,16 @@
   <!-- CAPTURE -->
   <section id="view-capture" class="view active">
     <div class="actions">
-      <button id="btn-region" class="big primary"><span>Region</span><em>Drag over the part you want</em><small id="hk-region-label" class="chip"></small></button>
-      <button id="btn-window" class="big"><span>Window</span><em>Click a window to grab it</em><small id="hk-window-label" class="chip"></small></button>
-      <button id="btn-screen" class="big"><span>Whole screen</span><em>The monitor your mouse is on</em><small id="hk-screen-label" class="chip"></small></button>
-      <button id="btn-upload" class="big"><span>Region + upload</span><em>Capture, then send to ImgBay</em><small id="hk-upload-label" class="chip"></small></button>
+      <button id="btn-region" class="big primary s2"><span>Region</span><em>Drag over the part you want</em><small id="hk-region-label" class="chip"></small></button>
+      <button id="btn-window" class="big s2"><span>Window</span><em>Click a window to grab it</em><small id="hk-window-label" class="chip"></small></button>
+      <button id="btn-screen" class="big s2"><span>Whole screen</span><em>The monitor your mouse is on</em><small id="hk-screen-label" class="chip"></small></button>
+      <button id="btn-scroll" class="big s3"><span>Scrolling capture</span><em>A long page or list in one picture</em><small id="hk-scroll-label" class="chip"></small></button>
+      <button id="btn-upload" class="big s3"><span>Region + upload</span><em>Capture, then send to ImgBay</em><small id="hk-upload-label" class="chip"></small></button>
+    </div>
+    <h2 class="sub">Tools</h2>
+    <div class="actions">
+      <button id="btn-picker" class="big s3"><span>Colour picker</span><em>Click any pixel to copy its colour</em><small id="hk-picker-label" class="chip"></small></button>
+      <button id="btn-ruler" class="big s3"><span>Ruler</span><em>Measure distances in pixels</em><small id="hk-ruler-label" class="chip"></small></button>
     </div>
 
     <div class="card options">
@@ -50,12 +56,18 @@
         </div>
       </div>
       <div class="btn-row">
+        <button id="last-edit" title="Add arrows, text, blur or hide parts, then save a copy">Edit</button>
         <button id="last-open">Open</button>
         <button id="last-folder">Show in folder</button>
         <button id="last-copy">Copy image</button>
         <button id="last-upload" class="hidden">Upload to ImgBay</button>
         <button id="last-dismiss" title="Only removes this panel. The file and History stay.">Dismiss</button>
       </div>
+    </div>
+    <div id="colors-card" class="card hidden">
+      <h3>Picked colours</h3>
+      <div id="color-list" class="swatches"></div>
+      <p class="help">Click a colour to copy it again. The format is set in Settings.</p>
     </div>
     <div id="status" class="status"></div>
   </section>
@@ -87,6 +99,9 @@
     <label class="row">Window <input id="hk-window" class="hk" readonly placeholder="Press a key combination"></label>
     <label class="row">Whole screen <input id="hk-screen" class="hk" readonly placeholder="Press a key combination"></label>
     <label class="row">Region + upload <input id="hk-upload" class="hk" readonly placeholder="Press a key combination"></label>
+    <label class="row">Scrolling capture <input id="hk-scroll" class="hk" readonly placeholder="Press a key combination"></label>
+    <label class="row">Colour picker <input id="hk-picker" class="hk" readonly placeholder="Press a key combination"></label>
+    <label class="row">Ruler <input id="hk-ruler" class="hk" readonly placeholder="Press a key combination"></label>
     <div class="btn-row"><button data-reset-hotkeys>Reset shortcuts</button></div>
     <p class="help">To use PrintScreen, first turn off its Snipping Tool shortcut in Windows settings.</p>
     <div id="hk-error" class="error hidden"></div>
@@ -94,6 +109,12 @@
     <h2>While capturing</h2>
     <label class="row check"><input type="checkbox" id="s-editBeforeSave"> <span>Edit before saving<small class="help">After you select an area, a toolbar lets you adjust it and add arrows, text, blur or hide. Off means the capture is saved the moment you let go. You can still hold Shift when you let go to edit just once.</small></span></label>
     <label class="row check"><input type="checkbox" id="s-keepOverlays"> <span>Fast capture<small class="help">Keeps the capture screens ready in the background so shortcuts react instantly. Turn it off to save some memory; captures then start a little slower.</small></span></label>
+
+    <h2>Tools</h2>
+    <label class="row">Copy colours as
+      <select id="s-colorFormat"><option value="hex">HEX, like #1A2B3C</option><option value="rgb">RGB, like rgb(26, 43, 60)</option><option value="hsl">HSL, like hsl(210, 40%, 17%)</option></select>
+    </label>
+    <p class="help">Scrolling capture starts where the page is now, so scroll to the top first. Select only the part that scrolls, and keep the mouse still until it finishes (Esc stops early).</p>
 
     <h2>After a capture</h2>
     <label class="row check"><input type="checkbox" id="s-saveToFile"> <span>Save to a file</span></label>
@@ -164,7 +185,7 @@
 
     <h2>App</h2>
     <label class="row check"><input type="checkbox" id="s-autostart"> <span>Start Snipzi when I sign in to Windows</span></label>
-    <p class="muted small">Version 0.2.2</p>
+    <p class="muted small">Version 0.3.0</p>
   </section>
 </main>
 

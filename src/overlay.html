@@ -3,9 +3,12 @@
 <head>
 <meta charset="utf-8">
 <title>Snipzi capture</title>
+<script>if (/[?&]editor=1/.test(location.search)) document.documentElement.classList.add("editor");</script>
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; cursor: crosshair; user-select: none; -webkit-user-select: none; font: 13px "Segoe UI", system-ui, sans-serif; }
-  canvas { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; display: block; }
+  #wrap { position: absolute; inset: 0; overflow: hidden; }
+  #stage { position: absolute; inset: 0; }
+  canvas { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; }
   #ann { pointer-events: none; }
   #dim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.35); }
   #sel { position: absolute; display: none; box-sizing: border-box; border: 1px solid #fff; outline: 1px dashed #6c4ae6; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45); }
@@ -18,6 +21,16 @@
   #winhl { position: absolute; display: none; box-sizing: border-box; border: 3px solid #6c4ae6; background: rgba(108, 74, 230, 0.12); box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.45); pointer-events: none; }
   #tag { position: absolute; display: none; padding: 2px 6px; color: #fff; background: rgba(20, 20, 30, 0.88); border-radius: 4px; white-space: nowrap; pointer-events: none; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; }
   #hint { position: absolute; left: 50%; top: 18px; transform: translateX(-50%); padding: 7px 14px; color: #fff; background: rgba(20, 20, 30, 0.88); border-radius: 8px; pointer-events: none; text-align: center; max-width: 80vw; }
+  /* colour picker */
+  #loupe { position: absolute; display: none; width: 140px; padding: 4px; background: rgba(20, 20, 30, 0.92); border-radius: 8px; color: #fff; pointer-events: none; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
+  #lcv { position: static; width: 132px; height: 132px; image-rendering: pixelated; border-radius: 4px; }
+  #lval { margin-top: 4px; font: 12px/1.45 Consolas, "Segoe UI", monospace; white-space: pre; }
+  #lsw { display: inline-block; width: 12px; height: 12px; border: 1px solid #fff; vertical-align: -2px; margin-right: 5px; }
+  /* ruler */
+  #mbox { position: absolute; display: none; box-sizing: border-box; border: 1px solid #ff3b6b; background: rgba(255, 59, 107, 0.12); pointer-events: none; }
+  #mlabel { position: absolute; display: none; padding: 5px 9px; color: #fff; background: rgba(20, 20, 30, 0.94); border: 1px solid #ff3b6b; border-radius: 8px; font: 12px/1.5 "Segoe UI", sans-serif; white-space: pre; cursor: pointer; }
+  #mlabel b { font-size: 14px; }
+  /* toolbar */
   #bar { position: absolute; display: none; padding: 8px; color: #fff; background: rgba(24, 24, 34, 0.96); border-radius: 10px; cursor: default; box-shadow: 0 6px 24px rgba(0,0,0,.45); width: 560px; }
   #bar .row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 6px; }
   #bar button { padding: 5px 9px; border: 0; border-radius: 6px; font: inherit; cursor: pointer; background: #34344a; color: #fff; }
@@ -30,19 +43,33 @@
   #bar .lbl { color: #a9a9c0; margin: 0 4px 0 8px; font-size: 12px; }
   #toolhint { color: #b9b9d0; font-size: 12px; }
   .txt { position: absolute; margin: 0; padding: 0 2px; border: 1px dashed #fff; background: rgba(0,0,0,.25); outline: none; font-weight: 600; font-family: "Segoe UI", Arial, sans-serif; min-width: 40px; }
+  .ed-only { display: none !important; }
+  /* editor window (reopened capture) */
+  html.editor body { background: #14141c; cursor: default; }
+  html.editor #wrap { top: var(--barh, 120px); overflow: auto; display: flex; padding: 14px; box-sizing: border-box; }
+  html.editor #stage { position: relative; inset: auto; flex: none; margin: auto; box-shadow: 0 0 0 1px #3a3a52, 0 8px 30px rgba(0,0,0,.5); cursor: crosshair; }
+  html.editor #bar { display: block; position: fixed; left: 0; top: 0; right: 0; width: auto; border-radius: 0; z-index: 5; }
+  html.editor .ed-only { display: inline-flex !important; align-items: center; gap: 4px; }
+  html.editor .fs-only { display: none !important; }
+  #zlabel { min-width: 44px; text-align: center; color: #b9b9d0; }
 </style>
 </head>
 <body>
-<canvas id="frame"></canvas>
-<canvas id="ann"></canvas>
-<div id="dim"></div>
-<div id="winhl"></div>
-<div id="sel">
-  <i class="h h-nw" data-h="nw"></i><i class="h h-n" data-h="n"></i><i class="h h-ne" data-h="ne"></i>
-  <i class="h h-e" data-h="e"></i><i class="h h-se" data-h="se"></i><i class="h h-s" data-h="s"></i>
-  <i class="h h-sw" data-h="sw"></i><i class="h h-w" data-h="w"></i>
-</div>
-<div id="tag"></div>
+<div id="wrap"><div id="stage">
+  <canvas id="frame"></canvas>
+  <canvas id="ann"></canvas>
+  <div id="dim"></div>
+  <div id="winhl"></div>
+  <div id="sel">
+    <i class="h h-nw" data-h="nw"></i><i class="h h-n" data-h="n"></i><i class="h h-ne" data-h="ne"></i>
+    <i class="h h-e" data-h="e"></i><i class="h h-se" data-h="se"></i><i class="h h-s" data-h="s"></i>
+    <i class="h h-sw" data-h="sw"></i><i class="h h-w" data-h="w"></i>
+  </div>
+  <div id="mbox"></div>
+  <div id="mlabel" title="Click to copy the size"></div>
+  <div id="loupe"><canvas id="lcv" width="132" height="132"></canvas><div id="lval"></div></div>
+  <div id="tag"></div>
+</div></div>
 <div id="hint"></div>
 <div id="bar">
   <div class="row" id="tools">
@@ -62,6 +89,10 @@
     <span class="lbl">Size</span>
     <button data-size="0" title="Thin">S</button><button data-size="1" title="Medium">M</button><button data-size="2" title="Thick">L</button>
     <button id="undo" title="Undo the last drawing (Ctrl+Z)">Undo</button>
+    <span class="ed-only"><span class="lbl">Zoom</span>
+      <button id="zout" title="Zoom out (Ctrl and minus)">-</button><span id="zlabel"></span><button id="zin" title="Zoom in (Ctrl and plus)">+</button>
+      <button id="zfit" title="Fit the picture to the window (Ctrl+0)">Fit</button><button id="z100" title="Actual size">100%</button>
+    </span>
     <span class="spacer"></span>
     <button id="cancel" title="Throw this capture away (Esc)">Cancel</button>
     <button id="saveup" title="Save, then upload to ImgBay">Save and upload</button>

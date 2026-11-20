@@ -10,6 +10,10 @@ Quick screenshots of your whole screen or any part of it. Snipzi lives in the sy
 - **Watermark** (optional): a single centered stamp or a tiled pattern, with adjustable opacity.
 - **Editor** after you select an area (turn on "Edit before saving", or hold Shift when you let go): resize or move the area, then add arrows, boxes, circles, pen, highlight, text, numbered markers, blur or a solid black hide box.
 - **Window capture**, **delay timer** (3, 5 or 10 seconds, for menus and tooltips), an optional **pop-up** after each capture, a folder picker, and a **fast capture** switch you can turn off to save memory.
+- **Scrolling capture**: select the part of a page or list that scrolls, and Snipzi scrolls it with the mouse wheel and stitches one long picture. Sticky headers and footers are kept once, Esc stops early, and it ends by itself at the bottom. Scroll to the top first, select only the scrolling part, and keep the mouse still while it runs.
+- **Colour picker**: a magnifier follows the pointer, click copies the colour as HEX, RGB or HSL, and recent colours are kept on the Capture tab.
+- **Ruler**: drag to measure width, height and diagonal in real pixels; arrow keys fine-tune and C copies the size.
+- **Edit later**: the Edit button on the Last screenshot panel and on every History entry reopens the picture in an editor window with zoom. Saving always makes a new file and leaves the original alone.
 - **Save as** PNG, JPEG, WebP or PDF, with your own file name pattern and subfolders.
 - **Copy to clipboard** and **save to a file**, either or both.
 - **History** of your last 20 captures.
@@ -23,6 +27,9 @@ Quick screenshots of your whole screen or any part of it. Snipzi lives in the sy
 | Capture screen | Ctrl+Shift+2 |
 | Capture window (click it) | Ctrl+Shift+3 |
 | Capture region and upload to ImgBay | Ctrl+Shift+4 |
+| Scrolling capture | Ctrl+Shift+5 |
+| Colour picker | Ctrl+Shift+6 |
+| Ruler | Ctrl+Shift+7 |
 
 Change them in Settings: click the box and press the keys you want. Windows reserves PrintScreen for the Snipping Tool by default. To use it here, turn that off in Windows Settings under Accessibility, Keyboard.
 

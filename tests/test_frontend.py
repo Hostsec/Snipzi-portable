@@ -333,6 +333,10 @@ with sync_playwright() as p:
     m.click("#btn-window"); m.click("#btn-upload")
     modes = [c["args"]["mode"] for c in m.evaluate("window.__calls") if c["cmd"] == "start_capture"]
     check("capture buttons start window and upload modes", modes == ["window", "upload"], str(modes))
+    m.evaluate("window.__calls.length = 0")
+    m.click("#btn-scroll"); m.click("#btn-picker"); m.click("#btn-ruler")
+    modes = [c["args"]["mode"] for c in m.evaluate("window.__calls") if c["cmd"] == "start_capture"]
+    check("scroll, picker and ruler buttons start those modes", modes == ["scroll", "picker", "ruler"], str(modes))
     m.evaluate("document.querySelector('.tab[data-view=settings]').click()")
     m.evaluate("window.__mock = async (cmd, a, o) => cmd === 'pick_folder' ? 'D:\\\\Shots' : null")
     m.click("#browse-dir"); m.wait_for_timeout(150)
@@ -343,7 +347,7 @@ with sync_playwright() as p:
     m.evaluate("window.__calls.length = 0")
     m.click("[data-reset-hotkeys]"); m.wait_for_timeout(150)
     hk = [c for c in m.evaluate("window.__calls") if c["cmd"] == "set_hotkeys"]
-    check("reset shortcuts re-registers defaults", hk and hk[-1]["args"]["keys"] == {"region": "Ctrl+Shift+1", "screen": "Ctrl+Shift+2", "window": "Ctrl+Shift+3", "upload": "Ctrl+Shift+4"}, str(hk))
+    check("reset shortcuts re-registers defaults", hk and hk[-1]["args"]["keys"] == {"region": "Ctrl+Shift+1", "screen": "Ctrl+Shift+2", "window": "Ctrl+Shift+3", "upload": "Ctrl+Shift+4", "scroll": "Ctrl+Shift+5", "picker": "Ctrl+Shift+6", "ruler": "Ctrl+Shift+7"}, str(hk))
     m.click("[data-theme-pick=green]")
     check("theme: click applies green at once and persists", m.evaluate("document.documentElement.dataset.theme") == "green" and m.evaluate("window.__snipzi.getSettings().theme") == "green")
     bg = m.evaluate("getComputedStyle(document.body).backgroundColor")
@@ -373,6 +377,195 @@ with sync_playwright() as p:
     check("annotate: blur removes fine detail (checkerboard flattened)", r["blurRange"] < r["plainRange"] / 2, str(r))
     check("annotate: box outline is red", r["rectEdge"][0] > 200 and r["rectEdge"][1] < 100, str(r["rectEdge"]))
     an.close()
+
+    # ---------------- overlay: scroll, picker, ruler ----------------
+    ov, oerr = open_overlay({"mode": "scroll", "edit": True})
+    check("scroll mode: hint explains what to select", "scrolls it for you" in ov.evaluate("document.getElementById('hint').textContent"))
+    drag(ov, (100, 100), (300, 400), shift=True)
+    res = finished(ov)
+    check("scroll mode: finishes at once, even with edit-before-save and Shift", (res["x"], res["y"], res["w"], res["h"]) == (200, 200, 400, 600) and res["shapes"] == [], str(res))
+    check("scroll mode: no toolbar", not bar_visible(ov))
+
+    rearm(ov, {"mode": "picker"})
+    check("picker: no dimming so colours are true", ov.evaluate("getComputedStyle(document.getElementById('dim')).display") == "none")
+    ov.mouse.move(100, 100)
+    check("picker: loupe shows hex under the pointer", "#C8C880" in ov.evaluate("document.getElementById('lval').textContent") and ov.evaluate("getComputedStyle(document.getElementById('loupe')).display") == "block", ov.evaluate("document.getElementById('lval').textContent"))
+    ov.keyboard.press("ArrowRight")
+    check("picker: arrow key moves one pixel", "#C9C880" in ov.evaluate("document.getElementById('lval').textContent"))
+    ov.mouse.click(100, 100)
+    ov.wait_for_function("window.__calls.some(c => c.cmd === 'finish_pick')")
+    pr = [c for c in ov.evaluate("window.__calls") if c["cmd"] == "finish_pick"][0]["args"]["result"]
+    check("picker: click sends the colour and pixel", (pr["r"], pr["g"], pr["b"], pr["x"], pr["y"]) == (200, 200, 128, 200, 200), str(pr))
+    rearm(ov, {"mode": "picker"})
+    ov.keyboard.press("Escape"); ov.wait_for_function("window.__calls.some(c => c.cmd === 'cancel_capture')")
+    check("picker: Esc cancels", True)
+
+    rearm(ov, {"mode": "ruler"})
+    ov.mouse.move(150, 120)
+    check("ruler: shows pointer coordinates", ov.evaluate("document.getElementById('tag').textContent") == "300, 240")
+    drag(ov, (100, 100), (300, 250))
+    lab = ov.evaluate("document.getElementById('mlabel').textContent")
+    check("ruler: measures width, height and diagonal in real pixels", "400 \u00d7 300 px" in lab and "diagonal 500 px" in lab, lab)
+    check("ruler: stays open after the drag", not any(c["cmd"] in ("cancel_capture", "finish_region") for c in ov.evaluate("window.__calls")))
+    ov.keyboard.press("ArrowRight"); ov.keyboard.press("Shift+ArrowDown")
+    check("ruler: arrow keys fine-tune the end point", "401 \u00d7 310 px" in ov.evaluate("document.getElementById('mlabel').textContent"), ov.evaluate("document.getElementById('mlabel').textContent"))
+    ov.keyboard.press("c"); ov.wait_for_function("window.__calls.some(c => c.cmd === 'copy_text')")
+    ct = [c for c in ov.evaluate("window.__calls") if c["cmd"] == "copy_text"][0]["args"]["text"]
+    check("ruler: C copies the size as text", ct == "401 x 310", ct)
+    ov.wait_for_function("document.getElementById('mlabel').textContent.includes('Copied')")
+    check("ruler: second drag starts a new measurement", True)
+    drag(ov, (50, 50), (60, 70))
+    check("ruler: new measurement replaces the old one", "20 \u00d7 40 px" in ov.evaluate("document.getElementById('mlabel').textContent"), ov.evaluate("document.getElementById('mlabel').textContent"))
+    check("overlay (picker/ruler/scroll): no JS errors", not oerr, str(oerr))
+    ov.close()
+
+    # ---------------- editor window ----------------
+    seed = ctx.new_page(); seed.goto(BASE + "/index.html"); seed.wait_for_function("window.__snipzi !== undefined")
+    def seed_image(w, h, title="Test picture"):
+        seed.evaluate("""async ([w, h, title]) => {
+          const c = new OffscreenCanvas(w, h), x = c.getContext('2d'); const d = x.createImageData(w, h);
+          for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) { const i = (yy*w+xx)*4; d.data[i] = xx % 256; d.data[i+1] = yy % 256; d.data[i+2] = 128; d.data[i+3] = 255; }
+          x.putImageData(d, 0, 0);
+          await fpsIdbPut('edit-src', {blob: await c.convertToBlob({type: 'image/png'}), title});
+          localStorage.setItem('snipziEditKey', 'edit-src');
+        }""", [w, h, title])
+    def open_editor_page(vw=1000, vh=800):
+        pg2 = ctx.new_page(); pg2.set_viewport_size({"width": vw, "height": vh}); e2 = []; pg2.on("pageerror", lambda e: e2.append(str(e)))
+        pg2.goto(BASE + "/overlay.html?editor=1")
+        pg2.wait_for_function("document.getElementById('zlabel').textContent !== ''")
+        return pg2, e2
+    def stage_box(pg2): return pg2.evaluate("(() => { const r = document.getElementById('stage').getBoundingClientRect(); return {x: r.x, y: r.y, w: r.width, h: r.height}; })()")
+
+    seed_image(800, 400)
+    ed, eerr = open_editor_page()
+    check("editor: opens with Fit at 100% for a small picture", ed.evaluate("document.getElementById('zlabel').textContent") == "100%")
+    check("editor: toolbar docked, shows Save a copy and Close", ed.evaluate("document.getElementById('save').textContent") == "Save a copy" and ed.evaluate("document.getElementById('cancel').textContent") == "Close")
+    check("editor: title carries the picture name", "Test picture" in ed.evaluate("document.title"))
+    sb = stage_box(ed)
+    ed.click("[data-tool=hide]"); ed.mouse.move(sb["x"] + 100, sb["y"] + 50); ed.mouse.down(); ed.mouse.move(sb["x"] + 200, sb["y"] + 120, steps=4); ed.mouse.up()
+    ed.click("[data-tool=arrow]"); ed.mouse.move(sb["x"] + 300, sb["y"] + 200); ed.mouse.down(); ed.mouse.move(sb["x"] + 400, sb["y"] + 260, steps=4); ed.mouse.up()
+    # zoom out to 50% and draw again: coordinates must still be image pixels
+    ed.click("#zout"); ed.click("#zout"); ed.click("#zout")
+    zl = ed.evaluate("document.getElementById('zlabel').textContent")
+    check("editor: zoom out lowers the percentage", int(zl.rstrip('%')) < 70, zl)
+    sb2 = stage_box(ed)
+    scale = sb2["w"] / 800
+    ed.click("[data-tool=rect]")
+    ed.mouse.move(sb2["x"] + 500 * scale, sb2["y"] + 100 * scale); ed.mouse.down(); ed.mouse.move(sb2["x"] + 600 * scale, sb2["y"] + 180 * scale, steps=4); ed.mouse.up()
+    ed.keyboard.press("Escape")
+    check("editor: Esc with unsaved drawings does not close", not any(c["cmd"] == "close_editor" for c in ed.evaluate("window.__calls")))
+    ed.click("#save"); ed.wait_for_function("window.__calls.some(c => c.cmd === 'editor_done')")
+    er = [c for c in ed.evaluate("window.__calls") if c["cmd"] == "editor_done"][0]["args"]["result"]
+    check("editor: result covers the whole picture by default", (er["x"], er["y"], er["w"], er["h"]) == (0, 0, 800, 400) and er["key"] == "edit-src", str(er)[:200])
+    kinds = [x["t"] for x in er["shapes"]]
+    check("editor: three shapes drawn at different zoom levels", kinds == ["hide", "arrow", "rect"], str(kinds))
+    hb = er["shapes"][0]
+    check("editor: hide box in true image pixels at 100%", abs(hb["x"] - 100) <= 2 and abs(hb["y"] - 50) <= 2 and abs(hb["w"] - 100) <= 3 and abs(hb["h"] - 70) <= 3, str(hb))
+    rb = er["shapes"][2]
+    check("editor: box drawn at ~50% zoom still maps to image pixels", abs(rb["x"] - 500) <= 6 and abs(rb["y"] - 100) <= 6 and abs(rb["w"] - 100) <= 8 and abs(rb["h"] - 80) <= 8, str(rb))
+    check("editor: no JS errors", not eerr, str(eerr))
+    ed.close()
+
+    # crop with the Adjust tool, and a very tall picture
+    seed_image(800, 400)
+    ed, eerr = open_editor_page()
+    sb = stage_box(ed)
+    ed.click("[data-tool=select]")
+    se = ed.evaluate("(() => { const r = document.querySelector('#sel .h-se').getBoundingClientRect(); return [r.x + r.width/2, r.y + r.height/2]; })()")
+    ed.mouse.move(*se); ed.mouse.down(); ed.mouse.move(sb["x"] + 500, sb["y"] + 250, steps=4); ed.mouse.up()
+    nw = ed.evaluate("(() => { const r = document.querySelector('#sel .h-nw').getBoundingClientRect(); return [r.x + r.width/2, r.y + r.height/2]; })()")
+    ed.mouse.move(*nw); ed.mouse.down(); ed.mouse.move(sb["x"] + 100, sb["y"] + 50, steps=4); ed.mouse.up()
+    ed.keyboard.press("Enter"); ed.wait_for_function("window.__calls.some(c => c.cmd === 'editor_done')")
+    er = [c for c in ed.evaluate("window.__calls") if c["cmd"] == "editor_done"][0]["args"]["result"]
+    check("editor: handles crop the picture", abs(er["x"] - 100) <= 2 and abs(er["y"] - 50) <= 2 and abs(er["w"] - 400) <= 3 and abs(er["h"] - 200) <= 3, str(er)[:200])
+    ed.close()
+
+    seed_image(500, 4000, "Long page")
+    ed, eerr = open_editor_page(1000, 700)
+    zl = int(ed.evaluate("document.getElementById('zlabel').textContent").rstrip('%'))
+    box = stage_box(ed)
+    check("editor: tall picture is fitted to the window width and scrolls", zl >= 90 and box["h"] > 700, f"{zl} {box}")
+    ed.evaluate("document.getElementById('wrap').scrollTop = 1500")
+    sb = stage_box(ed)
+    ed.click("[data-tool=hide]")
+    vx, vy = sb["x"] + 100 * sb["w"] / 500, 300
+    ed.mouse.move(vx, vy); ed.mouse.down(); ed.mouse.move(vx + 60, vy + 40, steps=4); ed.mouse.up()
+    ed.click("#save"); ed.wait_for_function("window.__calls.some(c => c.cmd === 'editor_done')")
+    er = [c for c in ed.evaluate("window.__calls") if c["cmd"] == "editor_done"][0]["args"]["result"]
+    hb = er["shapes"][0]
+    expect_y = (vy - sb["y"]) * 4000 / sb["h"]
+    check("editor: drawing after scrolling lands on the right image rows", abs(hb["y"] - expect_y) <= 3 and hb["y"] > 1000, f"{hb} expected y {expect_y}")
+    check("editor (tall): no JS errors", not eerr, str(eerr))
+    ed.close()
+
+    # ---------------- main window: editor round trip, history images, colour, scroll ----------------
+    mm = ctx.new_page(); merr2 = []; mm.on("pageerror", lambda e: merr2.append(str(e)))
+    mm.goto(BASE + "/index.html"); mm.wait_for_function("window.__snipzi !== undefined")
+    mm.evaluate("localStorage.removeItem('snipziHistory'); localStorage.removeItem('snipziLast'); window.__snipzi.setSettings({filenameTemplate:'', folderTemplate:'', editBeforeSave:false, popupEnabled:false, saveToFile:true, historyEnabled:true, format:'png', watermarkEnabled:false, copyToClipboard:true, imgbayUrl:''})")
+    mm.evaluate("window.__snipzi.handleRegion({idx:0,x:0,y:0,w:120,h:80,shapes:[],kind:'region'})")
+    ts = mm.evaluate("JSON.parse(localStorage.getItem('snipziLast')).ts")
+    has = mm.evaluate("async (k) => !!(await fpsIdbGet(k))", "hist-%d" % ts)
+    check("history: the plain picture is stored for later editing", has)
+    mm.evaluate("window.__calls.length = 0")
+    mm.evaluate("document.querySelector('.tab[data-view=history]').click()")
+    check("history: every entry has an Edit button", mm.evaluate("[...document.querySelectorAll('#hist-list .actions2 button')].some(b => b.textContent === 'Edit')"))
+    mm.evaluate("[...document.querySelectorAll('#hist-list .actions2 button')].find(b => b.textContent === 'Edit').click()")
+    mm.wait_for_function("window.__calls.some(c => c.cmd === 'open_editor')")
+    src = mm.evaluate("async () => { const r = await fpsIdbGet('edit-src'); const b = await createImageBitmap(r.blob); return {w: b.width, h: b.height, title: r.title}; }")
+    check("history Edit: stored picture handed to the editor", (src["w"], src["h"]) == (120, 80), str(src))
+    check("history Edit: editor told which picture to load", mm.evaluate("localStorage.getItem('snipziEditKey')") == "edit-src")
+
+    # editor result is saved as a new file, original untouched
+    mm.evaluate("window.__saved.length = 0")
+    mm.evaluate("window.__snipzi.handleEditorDone({key:'edit-src', x:10, y:10, w:60, h:40, shapes:[{t:'hide', x:20, y:20, w:20, h:20}], upload:false})")
+    mm.wait_for_function("window.__saved.length === 1")
+    sv = mm.evaluate("window.__saved")[0]
+    check("editor save: new file named 'edited'", "-edited-" in sv["rel"], sv["rel"])
+    info = mm.evaluate(DECODE.replace("{w: bmp.width, h: bmp.height, px:", "{w: bmp.width, h: bmp.height, black: Array.from(x.getImageData(15, 15, 1, 1).data), other: Array.from(x.getImageData(2, 2, 1, 1).data), px:"), sv["bytes"])
+    check("editor save: cropped size and hide box applied", (info["w"], info["h"]) == (60, 40) and info["black"] == [0, 0, 0, 255] and info["other"][:3] == [12, 12, 128], str(info))
+    check("editor save: temporary picture cleaned up", mm.evaluate("async () => !(await fpsIdbGet('edit-src'))"))
+
+    # old entries without a stored picture fall back to the file
+    mm.evaluate("""(() => { const h = JSON.parse(localStorage.getItem('snipziHistory')); h[0].ts = 111; h[0].path = 'C:\\\\\\\\old\\\\\\\\shot.png'; localStorage.setItem('snipziHistory', JSON.stringify(h)); })()""")
+    mm.evaluate("window.__calls.length = 0")
+    mm.evaluate("window.__mock = (orig => async (cmd, a, o) => cmd === 'read_image_file' ? new Uint8Array([137,80,78,71,13,10,26,10]).buffer : orig(cmd, a, o))(window.__mock)")
+    mm.evaluate("window.__snipzi.editRecord(JSON.parse(localStorage.getItem('snipziHistory'))[0])")
+    mm.wait_for_function("window.__calls.some(c => c.cmd === 'read_image_file')")
+    check("history Edit: falls back to reading the saved file", True)
+    mm.evaluate("""(async () => {})()""")
+
+    # pruning: removing a history entry and dismissing last drops its stored picture
+    mm.evaluate("window.__snipzi.handleRegion({idx:0,x:0,y:0,w:50,h:50,shapes:[],kind:'region'})")
+    mm.evaluate("window.__snipzi.handleRegion({idx:0,x:0,y:0,w:50,h:50,shapes:[],kind:'region'})")
+    mm.evaluate("document.getElementById('hist-clear').click(); document.getElementById('hist-clear').click(); document.getElementById('last-dismiss').click()")
+    mm.wait_for_timeout(400)
+    keys = mm.evaluate("fpsIdbKeys()")
+    check("history: stored pictures are removed with their entries", not [k for k in keys if str(k).startswith("hist-")], str(keys))
+
+    # colour picker results
+    mm.evaluate("window.__calls.length = 0")
+    mm.evaluate("window.__snipzi.handleColor({r:200,g:200,b:128,x:1,y:1})")
+    mm.wait_for_function("window.__calls.some(c => c.cmd === 'copy_text')")
+    check("colour: HEX copied by default", [c for c in mm.evaluate("window.__calls") if c["cmd"] == "copy_text"][0]["args"]["text"] == "#C8C880")
+    check("colour: formats", mm.evaluate("[window.__snipzi.formatColor({r:200,g:200,b:128},'rgb'), window.__snipzi.formatColor({r:200,g:200,b:128},'hsl'), window.__snipzi.formatColor({r:0,g:0,b:0},'hsl')]") == ["rgb(200, 200, 128)", "hsl(60, 40%, 64%)", "hsl(0, 0%, 0%)"])
+    check("colour: swatch added to the Capture tab", mm.evaluate("document.querySelectorAll('#color-list .swatch').length") == 1 and not mm.evaluate("document.getElementById('colors-card').classList.contains('hidden')"))
+    mm.evaluate("window.__snipzi.handleColor({r:200,g:200,b:128,x:1,y:1}); window.__snipzi.handleColor({r:1,g:2,b:3,x:1,y:1})")
+    check("colour: duplicates are not repeated", mm.evaluate("document.querySelectorAll('#color-list .swatch').length") == 2)
+    mm.evaluate("window.__snipzi.setSettings({colorFormat:'rgb'})"); mm.evaluate("window.__calls.length = 0")
+    mm.evaluate("window.__snipzi.handleColor({r:1,g:2,b:3,x:1,y:1})"); mm.wait_for_function("window.__calls.some(c => c.cmd === 'copy_text')")
+    check("colour: format setting respected", [c for c in mm.evaluate("window.__calls") if c["cmd"] == "copy_text"][0]["args"]["text"] == "rgb(1, 2, 3)")
+
+    # scrolling capture result: note shown; edit-before-save opens the editor instead of saving
+    mm.evaluate("window.__saved.length = 0; window.__calls.length = 0")
+    mm.evaluate("window.__snipzi.handleRegion({idx:0,x:0,y:0,w:100,h:90,shapes:[],kind:'scroll',note:'Stopped. Kept everything captured so far.'})")
+    mm.wait_for_function("window.__saved.length === 1")
+    check("scroll result: saved as a 'scroll' capture with the note shown", "-scroll-" in mm.evaluate("window.__saved")[0]["rel"] and "Stopped" in mm.evaluate("document.getElementById('toast').textContent"))
+    mm.evaluate("window.__snipzi.setSettings({editBeforeSave:true}); window.__calls.length = 0")
+    mm.evaluate("window.__snipzi.handleRegion({idx:0,x:0,y:0,w:100,h:90,shapes:[],kind:'scroll'})")
+    mm.wait_for_function("window.__calls.some(c => c.cmd === 'open_editor')")
+    check("scroll result + edit before saving: opens the editor, saves nothing yet", mm.evaluate("window.__saved.length") == 1)
+    check("main page (editor/colour/scroll): no JS errors", not merr2, str(merr2))
+    mm.close(); seed.close()
     b.close()
 
 print("\n%d failure(s)" % len(fails))

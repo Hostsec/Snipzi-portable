@@ -253,6 +253,34 @@ async function fpsIdbGet(key) {
   }
 }
 
+async function fpsIdbDelete(key) {
+  const db = await fpsIdbOpen();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(FPS_IMGBAY_STORE, "readwrite");
+      tx.objectStore(FPS_IMGBAY_STORE).delete(key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function fpsIdbKeys() {
+  const db = await fpsIdbOpen();
+  try {
+    return await new Promise((resolve, reject) => {
+      const req = db.transaction(FPS_IMGBAY_STORE, "readonly").objectStore(FPS_IMGBAY_STORE).getAllKeys();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  } finally {
+    db.close();
+  }
+}
+
 /** Remembers the most recent capture's image bytes (only the latest one) for the Upload button. */
 async function fpsStoreUploadCandidate(dataUrl, relativePath) {
   const blob = await (await fetch(dataUrl)).blob();

@@ -13,6 +13,10 @@
     hotkeyScreen: "Ctrl+Shift+2",
     hotkeyWindow: "Ctrl+Shift+3",
     hotkeyUpload: "Ctrl+Shift+4",
+    hotkeyScroll: "Ctrl+Shift+5",
+    hotkeyPicker: "Ctrl+Shift+6",
+    hotkeyRuler: "Ctrl+Shift+7",
+    colorFormat: "hex",
     editBeforeSave: false,
     delaySeconds: 0,
     keepOverlays: true,
@@ -223,6 +227,13 @@
         localStorage.setItem("snipziHistory", JSON.stringify(history.slice(0, Math.floor(history.length / 2))));
       }
     }
+    // Keep the plain picture (no watermark) so it can be reopened in the editor later.
+    try {
+      await fpsIdbPut("hist-" + record.ts, { blob: await (await fetch(rawDataUrl)).blob(), title: record.name });
+    } catch (e) {
+      // storage problems only disable "Edit" for this picture
+    }
+    pruneImages();
     renderLast();
     renderHistory();
 
@@ -256,7 +267,13 @@
     try {
       const frame = await fetchFrame(p.idx);
       const raw = await renderCrop(frame, { x: p.x, y: p.y, w: p.w, h: p.h }, p.shapes);
-      await finalizeCapture(raw, p.kind === "window" ? "window" : "region", { upload: !!p.upload });
+      if (p.note) toast(p.note);
+      if (p.kind === "scroll" && getSettings().editBeforeSave) {
+        await openEditorWith(await (await fetch(raw)).blob(), "scrolling capture");
+        return;
+      }
+      const kind = p.kind === "window" ? "window" : p.kind === "scroll" ? "scroll" : "region";
+      await finalizeCapture(raw, kind, { upload: !!p.upload });
     } catch (e) {
       toast("Capture failed: " + msgOf(e));
       notifyNative("Snipzi", "Capture failed: " + msgOf(e));
@@ -278,8 +295,136 @@
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Editor: reopen a picture, annotate it, save a copy
+  // -------------------------------------------------------------------------
+  async function openEditorWith(blob, title, from) {
+    await fpsIdbPut("edit-src", { blob, title, from: from || null });
+    localStorage.setItem("snipziEditKey", "edit-src");
+    await invoke("open_editor");
+  }
+
+  async function imageForRecord(rec) {
+    const stored = await fpsIdbGet("hist-" + rec.ts).catch(() => null);
+    if (stored && stored.blob) return stored.blob;
+    if (rec.path) {
+      try {
+        const bytes = await invoke("read_image_file", { path: rec.path });
+        return new Blob([bytes]);
+      } catch (e) {
+        // fall through to the message below
+      }
+    }
+    return null;
+  }
+
+  async function editRecord(rec) {
+    if (!rec) return;
+    const blob = await imageForRecord(rec);
+    if (!blob) {
+      toast("This picture is no longer available to edit. Its file was moved or deleted, or it is a PDF from an older version.");
+      return;
+    }
+    try {
+      await openEditorWith(blob, rec.name, rec.ts);
+    } catch (e) {
+      toast("Could not open the editor: " + msgOf(e));
+    }
+  }
+
+  async function handleEditorDone(p) {
+    try {
+      const rec = await fpsIdbGet(p.key || "edit-src");
+      if (!rec || !rec.blob) throw new Error("The picture is no longer available.");
+      const bmp = await createImageBitmap(rec.blob);
+      const c = new OffscreenCanvas(bmp.width, bmp.height);
+      const cx = c.getContext("2d");
+      cx.drawImage(bmp, 0, 0);
+      const px = cx.getImageData(0, 0, bmp.width, bmp.height);
+      const frame = { w: bmp.width, h: bmp.height, data: px.data };
+      const raw = await renderCrop(frame, { x: p.x, y: p.y, w: p.w, h: p.h }, p.shapes);
+      await finalizeCapture(raw, "edited", { upload: !!p.upload });
+    } catch (e) {
+      toast("Could not save the edited picture: " + msgOf(e));
+    } finally {
+      fpsIdbDelete("edit-src").catch(() => {});
+    }
+  }
+
+  /** Deletes stored pictures that are no longer in History or the Last screenshot panel. */
+  async function pruneImages() {
+    try {
+      const keep = new Set(readJson("snipziHistory", []).map((r) => "hist-" + r.ts));
+      const last = readJson("snipziLast", null);
+      if (last) keep.add("hist-" + last.ts);
+      for (const k of await fpsIdbKeys()) {
+        if (typeof k === "string" && k.startsWith("hist-") && !keep.has(k)) await fpsIdbDelete(k);
+      }
+    } catch (e) {
+      // best effort
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Colour picker
+  // -------------------------------------------------------------------------
+  function formatColor(c, fmt) {
+    const [r, g, b] = [c.r, c.g, c.b];
+    if (fmt === "rgb") return `rgb(${r}, ${g}, ${b})`;
+    if (fmt === "hsl") {
+      const rn = r / 255, gn = g / 255, bn = b / 255;
+      const mx = Math.max(rn, gn, bn), mn = Math.min(rn, gn, bn);
+      const l = (mx + mn) / 2;
+      let h = 0, s = 0;
+      if (mx !== mn) {
+        const d = mx - mn;
+        s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+        if (mx === rn) h = (gn - bn) / d + (gn < bn ? 6 : 0);
+        else if (mx === gn) h = (bn - rn) / d + 2;
+        else h = (rn - gn) / d + 4;
+        h *= 60;
+      }
+      return `hsl(${Math.round(h)}, ${Math.round(s * 100)}%, ${Math.round(l * 100)}%)`;
+    }
+    return "#" + [r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("").toUpperCase();
+  }
+
+  async function handleColor(p) {
+    const text = formatColor(p, getSettings().colorFormat);
+    const hex = formatColor(p, "hex");
+    const list = readJson("snipziColors", []).filter((c) => c.hex !== hex);
+    list.unshift({ hex, r: p.r, g: p.g, b: p.b });
+    localStorage.setItem("snipziColors", JSON.stringify(list.slice(0, 12)));
+    renderColors();
+    try {
+      await invoke("copy_text", { text });
+      toast("Copied " + text);
+      // the Snipzi window is hidden while picking, so a notification is the only feedback
+      notifyNative("Snipzi", "Copied " + text);
+    } catch (e) {
+      toast("Could not copy the colour: " + msgOf(e));
+    }
+  }
+
+  function renderColors() {
+    const list = readJson("snipziColors", []);
+    $("colors-card").classList.toggle("hidden", !list.length);
+    const box = $("color-list");
+    box.innerHTML = "";
+    list.forEach((c) => {
+      const b = document.createElement("button");
+      b.className = "swatch";
+      b.style.background = c.hex;
+      b.title = formatColor(c, getSettings().colorFormat) + " (click to copy)";
+      b.addEventListener("click", () =>
+        invoke("copy_text", { text: formatColor(c, getSettings().colorFormat) }).then(() => toast("Copied " + formatColor(c, getSettings().colorFormat)))
+      );
+      box.appendChild(b);
+    });
+  }
+
   // exposed for tests
-  window.__snipzi = { renderCrop, finalizeCapture, getSettings, setSettings, handleRegion, handleScreen };
+  window.__snipzi = { renderCrop, finalizeCapture, getSettings, setSettings, handleRegion, handleScreen, handleEditorDone, handleColor, formatColor, editRecord };
 
   // -------------------------------------------------------------------------
   // ImgBay upload
@@ -346,6 +491,7 @@
     $("last-name").textContent = r.name || "";
     $("last-meta").textContent = metaText(r) + (r.path ? "" : (metaText(r) ? ", " : "") + "not saved to a file");
     $("last-open").disabled = !r.path;
+    $("last-edit").disabled = false;
     $("last-folder").disabled = !r.path;
     $("last-upload").classList.toggle("hidden", !getSettings().imgbayUrl);
     const links = $("last-links");
@@ -405,12 +551,14 @@
         b.addEventListener("click", fn);
         acts.appendChild(b);
       };
+      mk("Edit", () => editRecord(r));
       mk("Open", () => invoke("open_path", { path: r.path }).catch((e) => toast("Could not open it: " + msgOf(e))), !r.path);
       mk("Folder", () => invoke("reveal_path", { path: r.path }).catch((e) => toast("Could not show it: " + msgOf(e))), !r.path);
       mk("Remove", () => {
         const next = readJson("snipziHistory", []).filter((h) => h.ts !== r.ts);
         localStorage.setItem("snipziHistory", JSON.stringify(next));
         renderHistory();
+        pruneImages();
       });
       item.appendChild(img);
       item.appendChild(info);
@@ -444,7 +592,7 @@
   async function applyHotkeys(showError) {
     const s = getSettings();
     try {
-      await invoke("set_hotkeys", { keys: { region: s.hotkeyRegion, screen: s.hotkeyScreen, window: s.hotkeyWindow, upload: s.hotkeyUpload } });
+      await invoke("set_hotkeys", { keys: { region: s.hotkeyRegion, screen: s.hotkeyScreen, window: s.hotkeyWindow, upload: s.hotkeyUpload, scroll: s.hotkeyScroll, picker: s.hotkeyPicker, ruler: s.hotkeyRuler } });
       $("hk-error").classList.add("hidden");
       return true;
     } catch (e) {
@@ -460,7 +608,10 @@
     ["hk-region", "hotkeyRegion", "hk-region-label"],
     ["hk-window", "hotkeyWindow", "hk-window-label"],
     ["hk-screen", "hotkeyScreen", "hk-screen-label"],
-    ["hk-upload", "hotkeyUpload", "hk-upload-label"]
+    ["hk-upload", "hotkeyUpload", "hk-upload-label"],
+    ["hk-scroll", "hotkeyScroll", "hk-scroll-label"],
+    ["hk-picker", "hotkeyPicker", "hk-picker-label"],
+    ["hk-ruler", "hotkeyRuler", "hk-ruler-label"]
   ];
   function refreshHotkeyLabels() {
     const s = getSettings();
@@ -505,7 +656,7 @@
   // -------------------------------------------------------------------------
   const CHECKS = ["saveToFile", "copyToClipboard", "notify", "popupEnabled", "editBeforeSave", "keepOverlays", "watermarkEnabled", "imgbayAuto"];
   const TEXTS = ["saveDir", "watermarkText", "filenameTemplate", "folderTemplate", "imgbayUrl"];
-  const SELECTS = ["watermarkStyle", "format", "imgbayExpiry", "imgbayVisibility"];
+  const SELECTS = ["watermarkStyle", "format", "imgbayExpiry", "imgbayVisibility", "colorFormat"];
   const RANGES = ["watermarkOpacity", "quality", "popupSeconds"];
 
   function pushOptions() {
@@ -604,6 +755,7 @@
       $("s-" + k).value = s[k];
       $("s-" + k).addEventListener("change", (e) => {
         setSettings({ [k]: e.target.value });
+        if (k === "colorFormat") renderColors();
         syncDependentUi();
       });
     });
@@ -629,7 +781,7 @@
     HOTKEYS.forEach(([input, key]) => wireHotkeyInput(input, key));
     document.querySelectorAll("[data-reset-hotkeys]").forEach((b) =>
       b.addEventListener("click", async () => {
-        setSettings({ hotkeyRegion: DEFAULTS.hotkeyRegion, hotkeyScreen: DEFAULTS.hotkeyScreen, hotkeyWindow: DEFAULTS.hotkeyWindow, hotkeyUpload: DEFAULTS.hotkeyUpload });
+        setSettings({ hotkeyRegion: DEFAULTS.hotkeyRegion, hotkeyScreen: DEFAULTS.hotkeyScreen, hotkeyWindow: DEFAULTS.hotkeyWindow, hotkeyUpload: DEFAULTS.hotkeyUpload, hotkeyScroll: DEFAULTS.hotkeyScroll, hotkeyPicker: DEFAULTS.hotkeyPicker, hotkeyRuler: DEFAULTS.hotkeyRuler });
         refreshHotkeyLabels();
         await applyHotkeys(true);
       })
@@ -669,7 +821,11 @@
     $("btn-window").addEventListener("click", () => invoke("start_capture", { mode: "window" }));
     $("btn-screen").addEventListener("click", () => invoke("start_capture", { mode: "screen" }));
     $("btn-upload").addEventListener("click", () => invoke("start_capture", { mode: "upload" }));
+    $("btn-scroll").addEventListener("click", () => invoke("start_capture", { mode: "scroll" }));
+    $("btn-picker").addEventListener("click", () => invoke("start_capture", { mode: "picker" }));
+    $("btn-ruler").addEventListener("click", () => invoke("start_capture", { mode: "ruler" }));
 
+    $("last-edit").addEventListener("click", () => editRecord(readJson("snipziLast", null)));
     $("last-open").addEventListener("click", () => {
       const r = readJson("snipziLast", null);
       if (r && r.path) invoke("open_path", { path: r.path }).catch((e) => toast("Could not open it: " + msgOf(e)));
@@ -698,6 +854,7 @@
     $("last-dismiss").addEventListener("click", () => {
       localStorage.removeItem("snipziLast");
       renderLast();
+      pruneImages();
     });
 
     $("hist-toggle").addEventListener("click", () => {
@@ -719,6 +876,7 @@
       btn.textContent = "Clear all";
       localStorage.setItem("snipziHistory", "[]");
       renderHistory();
+      pruneImages();
     });
 
     $("imgbay-login").addEventListener("click", () => {
@@ -741,9 +899,14 @@
     initSettingsForm();
     renderLast();
     renderHistory();
+    renderColors();
+    pruneImages();
 
     listen("capture:region", (e) => handleRegion(e.payload));
     listen("capture:screen", (e) => handleScreen(e.payload || {}));
+    listen("capture:color", (e) => handleColor(e.payload));
+    listen("capture:failed", (e) => toast(String(e.payload)));
+    listen("editor:done", (e) => handleEditorDone(e.payload));
     listen("popup:action", (e) => {
       const a = e.payload;
       if (a === "copy") $("last-copy").click();

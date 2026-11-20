@@ -4315,7 +4315,7 @@ dependencies = [
 
 [[package]]
 name = "snipzi"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -4330,6 +4330,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "windows-sys 0.59.0",
  "xcap",
 ]
 
