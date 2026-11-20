@@ -114,7 +114,10 @@
     <label class="row">Copy colours as
       <select id="s-colorFormat"><option value="hex">HEX, like #1A2B3C</option><option value="rgb">RGB, like rgb(26, 43, 60)</option><option value="hsl">HSL, like hsl(210, 40%, 17%)</option></select>
     </label>
-    <p class="help">Scrolling capture starts where the page is now, so scroll to the top first. Select only the part that scrolls, and keep the mouse still until it finishes (Esc stops early).</p>
+    <label class="row">Scrolling capture
+      <select id="s-scrollMode"><option value="manual">I scroll by hand</option><option value="auto">Scroll for me (automatic)</option></select>
+    </label>
+    <p class="help">By hand: select the scrolling part, let go, then scroll with your mouse wheel from the top down. Snipzi records what you scroll past; press Enter or click Done when finished. Automatic: Snipzi turns the wheel itself, so keep the mouse still. Either way, select only the part that scrolls, without fixed side bars.</p>
 
     <h2>After a capture</h2>
     <label class="row check"><input type="checkbox" id="s-saveToFile"> <span>Save to a file</span></label>
@@ -185,7 +188,7 @@
 
     <h2>App</h2>
     <label class="row check"><input type="checkbox" id="s-autostart"> <span>Start Snipzi when I sign in to Windows</span></label>
-    <p class="muted small">Version 0.3.0</p>
+    <p class="muted small">Version 0.3.1</p>
   </section>
 </main>
 

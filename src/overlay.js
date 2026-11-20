@@ -36,6 +36,7 @@
   let mode = "region";         // region | window | scroll | picker | ruler
   let editDefault = false;     // user setting: open the editor after selecting
   let uploadHotkey = false;    // this capture will be uploaded anyway
+  let scrollAuto = false;      // scrolling capture scrolls by itself (else the user scrolls)
   let windows = [];            // window rectangles in monitor pixels, topmost first
   let phase = "idle";          // idle | drag | edit | mdrag | measure
   let sx = 1, sy = 1, stageLeft = 0, stageTop = 0;
@@ -76,7 +77,11 @@
     if (mode === "window") return "Click a window to capture it. Esc cancels." + up;
     if (mode === "picker") return "Move over a colour and click to copy it. Arrow keys move one pixel. Esc cancels.";
     if (mode === "ruler") return "Drag to measure in pixels. Press C or click the label to copy the size. Esc closes.";
-    if (mode === "scroll") return "Drag over the part that scrolls (the page or list itself, without side bars). Snipzi then scrolls it for you, so keep the mouse still. Start from the top. Press Esc while it scrolls to stop.";
+    if (mode === "scroll") {
+      return scrollAuto
+        ? "Drag over the part that scrolls (the page or list itself, without side bars). Snipzi then scrolls it for you, so keep the mouse still. Start from the top. Esc stops it."
+        : "Drag over the part that scrolls (the page or list itself, without side bars). When you let go, scroll it yourself with the mouse wheel, from the top down. Press Enter or click Done when finished.";
+    }
     const parts = ["Drag to select an area."];
     parts.push(editDefault ? "You can edit it before saving." : "Press Space for the whole screen. Hold Shift when you let go to edit first.");
     parts.push("Esc cancels." + up);
@@ -119,6 +124,7 @@
       mode = p.mode || "region";
       editDefault = !!p.edit && (mode === "region" || mode === "window");
       uploadHotkey = !!p.upload;
+      scrollAuto = !!p.scrollAuto;
       windows = Array.isArray(p.windows) ? p.windows : [];
       try {
         const buf = await invoke("get_frame", { idx });

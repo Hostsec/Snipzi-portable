@@ -2,9 +2,13 @@
 <html><head><meta charset="utf-8"><title>Snipzi scrolling</title>
 <style>
   html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;font-family:"Segoe UI",system-ui,sans-serif;user-select:none}
-  .b{box-sizing:border-box;width:100%;height:100%;border-radius:12px;background:rgba(24,24,34,.94);color:#fff;padding:8px 14px;display:flex;flex-direction:column;justify-content:center;border:1px solid #6c4ae6}
-  b{font-size:14px}
-  small{color:#b9b9d0;font-size:12px;margin-top:2px}
+  .b{box-sizing:border-box;width:100%;height:100%;border-radius:12px;background:rgba(24,24,34,.95);color:#fff;padding:8px 12px;display:flex;align-items:center;gap:10px;border:1px solid #6c4ae6}
+  .b.warn{border-color:#ffb020}
+  .t{flex:1;min-width:0}
+  b{font-size:14px;display:block}
+  small{color:#b9b9d0;font-size:12px;display:block;margin-top:2px;line-height:1.35}
+  .b.warn small{color:#ffd58a}
+  button{border:0;border-radius:8px;padding:8px 14px;font:600 13px "Segoe UI",sans-serif;color:#fff;background:linear-gradient(135deg,#ff5d7a,#6c4ae6);cursor:pointer}
 </style></head>
-<body><div class="b"><b id="t">Scrolling capture...</b><small>Keep the mouse still. Press Esc to finish early.</small></div>
+<body><div class="b" id="box"><div class="t"><b id="t">Recording...</b><small id="s"></small></div><button id="done">Done</button></div>
 <script src="scrollstat.js"></script></body></html>

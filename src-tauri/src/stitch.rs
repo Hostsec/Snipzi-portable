@@ -393,6 +393,74 @@ pub fn run<IO: ScrollIo>(io: &mut IO, max_pixels: usize) -> Result<(Img, Stop), 
 }
 
 // ---------------------------------------------------------------------------
+// Hand scrolling: the user turns the mouse wheel, we watch the area and stitch what we see
+// ---------------------------------------------------------------------------
+
+pub trait ManualIo {
+    /// The area right now (no waiting).
+    fn snap(&mut self) -> Result<Img, String>;
+    /// Short pause between looks.
+    fn pause(&mut self);
+    fn stopped(&self) -> bool;
+    fn progress(&mut self, height: usize);
+    /// True while the user has scrolled too far or too fast to follow; false again once back on track.
+    fn lost(&mut self, lost: bool);
+}
+
+pub fn run_manual<IO: ManualIo>(io: &mut IO, max_pixels: usize) -> Result<(Img, Stop), String> {
+    let first = io.snap()?;
+    let w = first.w;
+    let mut last_seen = first.rgba.clone();
+    let mut st = Stitcher::new(first);
+    let mut moved = false;
+    let mut lost = false;
+    let mut last_move: i32 = 0;
+    let reason;
+    loop {
+        if io.stopped() {
+            reason = if moved { Stop::UserStopped } else { Stop::NoScroll };
+            break;
+        }
+        if st.height() * w >= max_pixels {
+            reason = Stop::SizeLimit;
+            break;
+        }
+        io.pause();
+        let cur = io.snap()?;
+        if cur.rgba == last_seen {
+            continue;
+        }
+        last_seen.clear();
+        last_seen.extend_from_slice(&cur.rgba);
+        let hint = if last_move != 0 { Some(last_move) } else { None };
+        match st.push(cur, hint) {
+            Push::Moved(s) => {
+                moved = true;
+                last_move = s;
+                if lost {
+                    lost = false;
+                    io.lost(false);
+                }
+                io.progress(st.height());
+            }
+            Push::NoChange => {
+                if lost {
+                    lost = false;
+                    io.lost(false);
+                }
+            }
+            Push::Lost => {
+                if !lost {
+                    lost = true;
+                    io.lost(true);
+                }
+            }
+        }
+    }
+    Ok((st.finish(), reason))
+}
+
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -716,5 +784,94 @@ mod tests {
         let ms = t.elapsed().as_millis();
         eprintln!("full-HD step took {ms} ms");
         assert_eq!(r, Push::Moved(420));
+    }
+
+    struct Hand {
+        page: Page,
+        script: Vec<usize>, // scroll position at each look
+        i: usize,
+        lost_log: Vec<bool>,
+    }
+    impl ManualIo for Hand {
+        fn snap(&mut self) -> Result<Img, String> {
+            let pos = *self.script.get(self.i).unwrap_or(self.script.last().unwrap());
+            self.i += 1;
+            Ok(self.page.render(pos))
+        }
+        fn pause(&mut self) {}
+        fn stopped(&self) -> bool {
+            self.i > self.script.len() + 2
+        }
+        fn progress(&mut self, _h: usize) {}
+        fn lost(&mut self, l: bool) {
+            self.lost_log.push(l);
+        }
+    }
+
+    fn hand(rows: usize, script: Vec<usize>) -> Hand {
+        Hand { page: Page::new(rows, 1.0), script, i: 0, lost_log: vec![] }
+    }
+
+    #[test]
+    fn hand_scrolling_smooth_and_continuous() {
+        // many small steps, with pauses (repeated positions), down to the end
+        let mut script = vec![0usize; 3];
+        let mut p = 0usize;
+        while p < 1710 {
+            p = (p + 37).min(1710);
+            script.push(p);
+            if p % 5 == 0 {
+                script.push(p);
+            }
+        }
+        let mut h = hand(2000, script);
+        let (img, why) = run_manual(&mut h, usize::MAX).unwrap();
+        assert_eq!(why, Stop::UserStopped);
+        assert!(same(&img, &h.page.expected(0)));
+        assert!(h.lost_log.is_empty());
+    }
+
+    #[test]
+    fn hand_scrolling_big_notches() {
+        // 120 px per look, the way a wheel with fast repeats behaves
+        let script: Vec<usize> = (0..=15).map(|k| (k * 120).min(1710)).collect();
+        let mut h = hand(2000, script);
+        let (img, _) = run_manual(&mut h, usize::MAX).unwrap();
+        assert!(same(&img, &h.page.expected(0)));
+    }
+
+    #[test]
+    fn hand_scrolling_too_fast_then_back_on_track() {
+        // jumps 600 px (more than the view), is reported lost, then returns near and carries on
+        let script = vec![0, 100, 700, 700, 190, 280, 400, 520, 640, 760, 880, 1000];
+        let mut h = hand(2000, script);
+        let (img, why) = run_manual(&mut h, usize::MAX).unwrap();
+        assert_eq!(why, Stop::UserStopped);
+        assert_eq!(h.lost_log, vec![true, false]);
+        // everything up to the last view reached is intact, nothing duplicated
+        let last = 1000 + h.page.scroll_len();
+        let exp = h.page.expected(0);
+        let want_rows = HEAD + last;
+        assert_eq!(&img.rgba[..want_rows * W * 4], &exp.rgba[..want_rows * W * 4]);
+        assert_eq!(img.h, HEAD + last + FOOT);
+    }
+
+    #[test]
+    fn hand_scrolling_nothing_moves() {
+        let mut h = hand(2000, vec![0, 0, 0]);
+        let (img, why) = run_manual(&mut h, usize::MAX).unwrap();
+        assert_eq!(why, Stop::NoScroll);
+        assert!(same(&img, &h.page.render(0)));
+    }
+
+    #[test]
+    fn hand_scrolling_up_and_down_adds_nothing_twice() {
+        let script = vec![0, 80, 160, 240, 120, 40, 140, 260, 380, 500];
+        let mut h = hand(2000, script);
+        let (img, _) = run_manual(&mut h, usize::MAX).unwrap();
+        assert_eq!(img.h, HEAD + 500 + h.page.scroll_len() + FOOT);
+        let exp = h.page.expected(0);
+        let rows = HEAD + 500 + h.page.scroll_len();
+        assert_eq!(&img.rgba[..rows * W * 4], &exp.rgba[..rows * W * 4]);
     }
 }

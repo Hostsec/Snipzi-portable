@@ -329,7 +329,15 @@ with sync_playwright() as p:
     m.evaluate("window.__calls.length = 0")
     m.click("[data-delay='5']"); m.click("#c-edit")
     opts = [c for c in m.evaluate("window.__calls") if c["cmd"] == "set_options"]
-    check("options pushed on delay and edit change", opts and opts[-1]["args"]["options"] == {"edit_before_save": True, "delay_secs": 5, "keep_overlays": True}, str(opts))
+    check("options pushed on delay and edit change", opts and opts[-1]["args"]["options"] == {"edit_before_save": True, "delay_secs": 5, "keep_overlays": True, "scroll_auto": False}, str(opts))
+    m.evaluate("window.__calls.length = 0")
+    m.evaluate("document.querySelector('.tab[data-view=settings]').click()")
+    m.select_option("#s-scrollMode", "auto")
+    opts = [c for c in m.evaluate("window.__calls") if c["cmd"] == "set_options"]
+    check("scroll mode setting is sent to the backend", opts and opts[-1]["args"]["options"]["scroll_auto"] is True, str(opts))
+    m.select_option("#s-scrollMode", "manual")
+    m.evaluate("document.querySelector('.tab[data-view=capture]').click()")
+    m.evaluate("window.__calls.length = 0")
     m.click("#btn-window"); m.click("#btn-upload")
     modes = [c["args"]["mode"] for c in m.evaluate("window.__calls") if c["cmd"] == "start_capture"]
     check("capture buttons start window and upload modes", modes == ["window", "upload"], str(modes))
@@ -380,11 +388,13 @@ with sync_playwright() as p:
 
     # ---------------- overlay: scroll, picker, ruler ----------------
     ov, oerr = open_overlay({"mode": "scroll", "edit": True})
-    check("scroll mode: hint explains what to select", "scrolls it for you" in ov.evaluate("document.getElementById('hint').textContent"))
+    check("scroll mode (by hand): hint says you scroll and press Enter or Done", "scroll it yourself" in ov.evaluate("document.getElementById('hint').textContent") and "Done" in ov.evaluate("document.getElementById('hint').textContent"))
     drag(ov, (100, 100), (300, 400), shift=True)
     res = finished(ov)
     check("scroll mode: finishes at once, even with edit-before-save and Shift", (res["x"], res["y"], res["w"], res["h"]) == (200, 200, 400, 600) and res["shapes"] == [], str(res))
     check("scroll mode: no toolbar", not bar_visible(ov))
+    rearm(ov, {"mode": "scroll", "scrollAuto": True})
+    check("scroll mode (automatic): hint says Snipzi scrolls", "scrolls it for you" in ov.evaluate("document.getElementById('hint').textContent"))
 
     rearm(ov, {"mode": "picker"})
     check("picker: no dimming so colours are true", ov.evaluate("getComputedStyle(document.getElementById('dim')).display") == "none")

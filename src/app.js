@@ -17,6 +17,7 @@
     hotkeyPicker: "Ctrl+Shift+6",
     hotkeyRuler: "Ctrl+Shift+7",
     colorFormat: "hex",
+    scrollMode: "manual",
     editBeforeSave: false,
     delaySeconds: 0,
     keepOverlays: true,
@@ -656,13 +657,13 @@
   // -------------------------------------------------------------------------
   const CHECKS = ["saveToFile", "copyToClipboard", "notify", "popupEnabled", "editBeforeSave", "keepOverlays", "watermarkEnabled", "imgbayAuto"];
   const TEXTS = ["saveDir", "watermarkText", "filenameTemplate", "folderTemplate", "imgbayUrl"];
-  const SELECTS = ["watermarkStyle", "format", "imgbayExpiry", "imgbayVisibility", "colorFormat"];
+  const SELECTS = ["watermarkStyle", "format", "imgbayExpiry", "imgbayVisibility", "colorFormat", "scrollMode"];
   const RANGES = ["watermarkOpacity", "quality", "popupSeconds"];
 
   function pushOptions() {
     const s = getSettings();
     invoke("set_options", {
-      options: { edit_before_save: !!s.editBeforeSave, delay_secs: Number(s.delaySeconds) || 0, keep_overlays: !!s.keepOverlays }
+      options: { edit_before_save: !!s.editBeforeSave, delay_secs: Number(s.delaySeconds) || 0, keep_overlays: !!s.keepOverlays, scroll_auto: s.scrollMode === "auto" }
     }).catch(() => {});
   }
 
@@ -756,6 +757,7 @@
       $("s-" + k).addEventListener("change", (e) => {
         setSettings({ [k]: e.target.value });
         if (k === "colorFormat") renderColors();
+        if (k === "scrollMode") pushOptions();
         syncDependentUi();
       });
     });

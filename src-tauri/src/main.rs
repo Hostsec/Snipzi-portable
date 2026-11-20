@@ -120,6 +120,10 @@ struct Capture {
     countdown: u32,
     /// Height of the scrolling capture gathered so far.
     scroll_px: usize,
+    /// The user is scrolling by hand (status card wording).
+    scroll_manual: bool,
+    /// Hand scrolling went too far or too fast to follow.
+    scroll_lost: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -127,11 +131,13 @@ struct Options {
     edit_before_save: bool,
     delay_secs: u32,
     keep_overlays: bool,
+    /// Scrolling capture scrolls by itself (otherwise the user scrolls by hand).
+    scroll_auto: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { edit_before_save: false, delay_secs: 0, keep_overlays: true }
+        Options { edit_before_save: false, delay_secs: 0, keep_overlays: true, scroll_auto: false }
     }
 }
 
@@ -478,11 +484,11 @@ fn run_capture(app: &AppHandle, mode: &str) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    let (edit, upload) = {
+    let (edit, upload, scroll_auto) = {
         let state = app.state::<AppState>();
-        let edit = state.opts.lock().unwrap().edit_before_save;
+        let o = *state.opts.lock().unwrap();
         let upload = state.cap.lock().unwrap().upload;
-        (edit, upload)
+        (o.edit_before_save, upload, o.scroll_auto)
     };
     for i in 0..count {
         let wins = {
@@ -493,7 +499,7 @@ fn run_capture(app: &AppHandle, mode: &str) -> Result<(), String> {
         app.emit_to(
             overlay_label(i),
             "overlay:frame",
-            json!({ "idx": i, "mode": mode, "edit": edit, "upload": upload, "windows": wins }),
+            json!({ "idx": i, "mode": mode, "edit": edit, "upload": upload, "windows": wins, "scrollAuto": scroll_auto }),
         )
         .map_err(|e| e.to_string())?;
     }
@@ -641,6 +647,24 @@ impl WinIo {
     }
 }
 
+impl stitch::ManualIo for WinIo {
+    fn snap(&mut self) -> Result<stitch::Img, String> {
+        self.capture()
+    }
+    fn pause(&mut self) {
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    fn stopped(&self) -> bool {
+        self.app.state::<AppState>().stop_scroll.load(Ordering::SeqCst)
+    }
+    fn progress(&mut self, height: usize) {
+        self.app.state::<AppState>().cap.lock().unwrap().scroll_px = height;
+    }
+    fn lost(&mut self, lost: bool) {
+        self.app.state::<AppState>().cap.lock().unwrap().scroll_lost = lost;
+    }
+}
+
 impl stitch::ScrollIo for WinIo {
     /// A view that has stopped moving (smooth scrolling takes a moment to settle).
     fn grab(&mut self) -> Result<stitch::Img, String> {
@@ -670,15 +694,22 @@ impl stitch::ScrollIo for WinIo {
 }
 
 #[tauri::command]
-fn get_scroll_status(state: tauri::State<AppState>) -> usize {
-    state.cap.lock().unwrap().scroll_px
+fn get_scroll_status(state: tauri::State<AppState>) -> Value {
+    let cap = state.cap.lock().unwrap();
+    json!({ "px": cap.scroll_px, "manual": cap.scroll_manual, "lost": cap.scroll_lost })
+}
+
+/// The "Done" button on the scrolling status card.
+#[tauri::command]
+fn finish_scroll(state: tauri::State<AppState>) {
+    state.stop_scroll.store(true, Ordering::SeqCst);
 }
 
 /// A small "Scrolling..." card, placed where it does not cover the captured area.
 fn show_scroll_status(app: &AppHandle, region: (i32, i32, u32, u32)) -> Option<WebviewWindow> {
     let m = cursor_monitor(app)?;
     let s = m.scale_factor();
-    let (pw, ph) = ((300.0 * s) as i32, (64.0 * s) as i32);
+    let (pw, ph) = ((320.0 * s) as i32, (92.0 * s) as i32);
     let (mp, ms) = (m.position(), m.size());
     let (mx0, my0, mx1, my1) = (mp.x, mp.y, mp.x + ms.width as i32, mp.y + ms.height as i32);
     let (rx, ry, rw, rh) = (region.0, region.1, region.2 as i32, region.3 as i32);
@@ -687,7 +718,7 @@ fn show_scroll_status(app: &AppHandle, region: (i32, i32, u32, u32)) -> Option<W
     let cy = (ry + rh / 2 - ph / 2).clamp(my0, (my1 - ph).max(my0));
     let spots = [(cx, ry + rh + gap), (cx, ry - ph - gap), (rx + rw + gap, cy), (rx - pw - gap, cy)];
     let (x, y) = spots.into_iter().find(|(x, y)| *x >= mx0 && *y >= my0 && *x + pw <= mx1 && *y + ph <= my1)?;
-    let win = helper_window(app, "scrollstat", "scrollstat.html", 300.0, 64.0).ok()?;
+    let win = helper_window(app, "scrollstat", "scrollstat.html", 320.0, 92.0).ok()?;
     let _ = win.set_size(PhysicalSize::new(pw as u32, ph as u32));
     let _ = win.set_position(PhysicalPosition::new(x, y));
     let _ = win.show();
@@ -741,34 +772,52 @@ fn do_scroll(app: &AppHandle, r: &RegionResult) -> Result<(Frame, Option<String>
     let (cx, cy) = (mx + x as i32 + w as i32 / 2, my + y as i32 + h as i32 / 2);
 
     let state = app.state::<AppState>();
+    let auto = state.opts.lock().unwrap().scroll_auto;
     state.stop_scroll.store(false, Ordering::SeqCst);
-    state.cap.lock().unwrap().scroll_px = h as usize;
+    {
+        let mut cap = state.cap.lock().unwrap();
+        cap.scroll_px = h as usize;
+        cap.scroll_manual = !auto;
+        cap.scroll_lost = false;
+    }
 
+    // Automatic mode drives the pointer itself; by hand, the user's pointer is left alone.
     let before = winput::cursor();
-    winput::move_cursor(cx, cy);
+    if auto {
+        winput::move_cursor(cx, cy);
+    }
     let status = show_scroll_status(app, (mx + x as i32, my + y as i32, w, h));
 
-    // Esc stops early and keeps what has been captured.
+    // Esc (and Enter, when scrolling by hand) finish early and keep what has been captured.
     let gs = app.global_shortcut();
-    let stop_app = app.clone();
-    let esc_ok = gs
-        .on_shortcut("Escape", move |_a, _s, ev| {
-            if ev.state == ShortcutState::Pressed {
-                stop_app.state::<AppState>().stop_scroll.store(true, Ordering::SeqCst);
-            }
-        })
-        .is_ok();
+    let mut keys_ok: Vec<&str> = Vec::new();
+    let finish_keys: &[&str] = if auto { &["Escape"] } else { &["Escape", "Enter"] };
+    for key in finish_keys {
+        let stop_app = app.clone();
+        if gs
+            .on_shortcut(*key, move |_a, _s, ev| {
+                if ev.state == ShortcutState::Pressed {
+                    stop_app.state::<AppState>().stop_scroll.store(true, Ordering::SeqCst);
+                }
+            })
+            .is_ok()
+        {
+            keys_ok.push(*key);
+        }
+    }
 
     let mut io = WinIo { monitor, x, y, w, h, cx, cy, app: app.clone() };
-    let result = stitch::run(&mut io, SCROLL_MAX_PIXELS);
+    let result = if auto { stitch::run(&mut io, SCROLL_MAX_PIXELS) } else { stitch::run_manual(&mut io, SCROLL_MAX_PIXELS) };
 
-    if esc_ok {
-        let _ = gs.unregister("Escape");
+    for key in keys_ok {
+        let _ = gs.unregister(key);
     }
     if let Some(win) = status {
         let _ = win.destroy();
     }
-    winput::move_cursor(before.0, before.1);
+    if auto {
+        winput::move_cursor(before.0, before.1);
+    }
 
     let (img, why) = result?;
     let one_view = img.h <= h as usize;
@@ -776,6 +825,7 @@ fn do_scroll(app: &AppHandle, r: &RegionResult) -> Result<(Frame, Option<String>
         stitch::Stop::EndReached => None,
         stitch::Stop::UserStopped => Some("Stopped. Kept everything captured so far.".to_string()),
         stitch::Stop::SizeLimit => Some("Reached the maximum size (about 40 megapixels). The picture ends there.".to_string()),
+        stitch::Stop::NoScroll if !auto => Some("Nothing was scrolled, so this is just the selected area.".to_string()),
         stitch::Stop::NoScroll => {
             return Err("Nothing scrolled. Select the part of the page that scrolls with the mouse wheel, and start with the pointer over it.".into());
         }
@@ -864,6 +914,8 @@ struct OptionsArg {
     edit_before_save: bool,
     delay_secs: u32,
     keep_overlays: bool,
+    #[serde(default)]
+    scroll_auto: bool,
 }
 
 #[tauri::command]
@@ -876,6 +928,7 @@ fn set_options(app: AppHandle, options: OptionsArg) {
         o.edit_before_save = options.edit_before_save;
         o.delay_secs = options.delay_secs.min(60);
         o.keep_overlays = options.keep_overlays;
+        o.scroll_auto = options.scroll_auto;
     }
     if keep_before != options.keep_overlays {
         let app2 = app.clone();
@@ -1263,6 +1316,7 @@ fn main() {
             finish_pick,
             cancel_capture,
             get_scroll_status,
+            finish_scroll,
             open_editor,
             editor_done,
             close_editor,
