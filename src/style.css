@@ -78,3 +78,14 @@ button.primary small { color: rgba(255, 255, 255, 0.85); }
 .theme[data-theme-pick="green"] i { background: linear-gradient(135deg, #cfe8d3, #7bbf86 50%, #3f8f5b); }
 .theme[data-theme-pick="grey"] i { background: linear-gradient(135deg, #e6e9ed, #9aa3ad 50%, #56616f); }
 .theme[data-theme-pick="dark"] i { background: linear-gradient(135deg, #2a2a30, #121214); }
+
+:root[data-theme="ember"] { --bg: #0b0b0b; --fg: #f2ece6; --muted: #a8998a; --card: #151311; --line: #ff8a1f; --accent: #ff8a1f; --accent2: #ffb347; --btn: #1d1a17; --btn-fg: #ffd9b0; --err: #ff6b5e; }
+:root[data-theme="ember"] header { border-bottom: 2px solid #ff8a1f; }
+:root[data-theme="ember"] .card, :root[data-theme="ember"] .hist-item { border: 1px solid #ff8a1f55; }
+:root[data-theme="ember"] button { border: 1px solid #ff8a1f66; }
+:root[data-theme="ember"] .row input[type="text"], :root[data-theme="ember"] .row select, :root[data-theme="ember"] .row .hk { border-color: #ff8a1f88; }
+:root[data-theme="ember"] button.primary, :root[data-theme="ember"] .seg button.on { color: #0b0b0b; border-color: transparent; }
+:root[data-theme="ember"] button.primary small, :root[data-theme="ember"] button.primary em { color: #2a1700; }
+:root[data-theme="ember"] .logo { color: #0b0b0b; }
+:root[data-theme="ember"] .tab.active { color: #ff8a1f; }
+.theme[data-theme-pick="ember"] i { background: linear-gradient(135deg, #0b0b0b 55%, #ff8a1f); border-color: #ff8a1f; }
